@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-HAMZZY MARKETPLACE BOT - COMPLETE PROFESSIONAL VERSION (POSTGRESQL)
+HAMZZY MARKETPLACE BOT - COMPLETE PROFESSIONAL VERSION
 All features working: BUY IG, BUY FACEBOOK, Wallet Control, Referrals,
 Admin Panel, Payment System, Withdrawals, Stock Management, Broadcasts,
 Auto-Email Extraction, Low Stock Alerts, Daily Reports, Notifications
 Channel: https://t.me/hamzzylogs
 Author: @hamzzyhacket
-Version: 8.1 - POSTGRESQL READY
+Version: 8.0 - FULLY COMPLETE (Railway Volume Ready)
 """
 
 import telebot
 from telebot import types
+import sqlite3
 import os
 import time
 import datetime
@@ -22,11 +23,6 @@ import shutil
 import threading
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
-
-# PostgreSQL imports (only used when DATABASE_URL exists)
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import sqlite3
 
 # =================================================================================
 # CONFIGURATION
@@ -104,7 +100,6 @@ logger = logging.getLogger(__name__)
 
 class Database:
     _instance = None
-    _use_postgres = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -116,38 +111,25 @@ class Database:
         if self._initialized:
             return
         self._initialized = True
-        
-        # Check if running on Railway (has DATABASE_URL)
-        self._use_postgres = os.environ.get('DATABASE_URL') is not None
-        
-        if self._use_postgres:
-            self.conn = None
-            self.init_postgres()
-            print("✅ Using PostgreSQL database")
-        else:
-            self.conn = None
-            self.init_sqlite()
-            print("✅ Using SQLite database")
+        self.conn = None
+        self.init_db()
     
     def connect(self):
-        if self._use_postgres:
-            if self.conn is None or self.conn.closed:
-                self.conn = psycopg2.connect(os.environ.get('DATABASE_URL'), cursor_factory=RealDictCursor)
-            return self.conn
-        else:
-            if self.conn is None:
-                self.conn = sqlite3.connect('marketplace.db', check_same_thread=False, timeout=30)
-                self.conn.row_factory = sqlite3.Row
-                self.conn.execute("PRAGMA synchronous = OFF")
-                self.conn.execute("PRAGMA journal_mode = WAL")
-                self.conn.execute("PRAGMA cache_size = 10000")
-            return self.conn
+        if self.conn is None:
+            # Use persistent volume on Railway (has /app/data), otherwise local file
+            if os.path.exists('/app/data'):
+                db_path = '/app/data/marketplace.db'
+            else:
+                db_path = 'marketplace.db'
+            self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA synchronous = OFF")
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA cache_size = 10000")
+        return self.conn
     
     def cursor(self):
-        if self._use_postgres:
-            return self.connect().cursor()
-        else:
-            return self.connect().cursor()
+        return self.connect().cursor()
     
     def commit(self):
         if self.conn:
@@ -158,231 +140,7 @@ class Database:
             self.conn.close()
             self.conn = None
     
-    def init_postgres(self):
-        conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-        c = conn.cursor()
-        
-        # Users table with referral_bonus_given column
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            wallet_balance REAL DEFAULT 0,
-            referral_code TEXT UNIQUE,
-            referred_by BIGINT,
-            total_referrals INTEGER DEFAULT 0,
-            referral_earnings REAL DEFAULT 0,
-            referral_bonus_given INTEGER DEFAULT 0,
-            join_date TEXT,
-            last_active TEXT,
-            total_spent REAL DEFAULT 0,
-            total_orders INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0,
-            is_admin INTEGER DEFAULT 0
-        )''')
-        
-        # IG STOCK
-        c.execute('''CREATE TABLE IF NOT EXISTS ig_stock (
-            id SERIAL PRIMARY KEY,
-            ig_username TEXT UNIQUE,
-            password TEXT,
-            has_password INTEGER DEFAULT 0,
-            followers_count INTEGER,
-            price REAL,
-            status TEXT DEFAULT 'available',
-            added_by BIGINT,
-            added_date TEXT,
-            sold_date TEXT,
-            sold_to BIGINT
-        )''')
-        
-        # FB CATEGORIES
-        c.execute('''CREATE TABLE IF NOT EXISTS fb_categories (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE,
-            display_name TEXT,
-            price REAL,
-            has_page INTEGER DEFAULT 0,
-            description TEXT,
-            is_active INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_date TEXT,
-            updated_date TEXT
-        )''')
-        
-        # FB STOCK
-        c.execute('''CREATE TABLE IF NOT EXISTS fb_stock (
-            id SERIAL PRIMARY KEY,
-            email TEXT,
-            password TEXT,
-            category_id INTEGER,
-            account_age TEXT,
-            has_screenshot INTEGER DEFAULT 0,
-            screenshot_file_ids TEXT,
-            price REAL,
-            status TEXT DEFAULT 'available',
-            added_by BIGINT,
-            added_date TEXT,
-            sold_date TEXT,
-            sold_to BIGINT
-        )''')
-        
-        # Orders
-        c.execute('''CREATE TABLE IF NOT EXISTS orders (
-            order_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            product_type TEXT,
-            product_name TEXT,
-            quantity INTEGER,
-            amount REAL,
-            delivery_info TEXT,
-            order_date TEXT,
-            status TEXT DEFAULT 'completed'
-        )''')
-        
-        # Transactions
-        c.execute('''CREATE TABLE IF NOT EXISTS transactions (
-            txn_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            type TEXT,
-            reference TEXT,
-            status TEXT,
-            timestamp TEXT,
-            processed_by BIGINT
-        )''')
-        
-        # Payments with screenshot storage
-        c.execute('''CREATE TABLE IF NOT EXISTS payments (
-            payment_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            method TEXT,
-            reference TEXT,
-            image_file_id TEXT,
-            status TEXT DEFAULT 'pending',
-            timestamp TEXT,
-            processed_by BIGINT,
-            processed_date TEXT
-        )''')
-        
-        # Withdrawals
-        c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
-            withdraw_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            bank_name TEXT,
-            account_number TEXT,
-            account_name TEXT,
-            status TEXT DEFAULT 'pending',
-            request_date TEXT,
-            processed_date TEXT,
-            processed_by BIGINT
-        )''')
-        
-        # Admin wallet
-        c.execute('''CREATE TABLE IF NOT EXISTS admin_wallet (
-            id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0,
-            total_earned REAL DEFAULT 0,
-            total_withdrawn REAL DEFAULT 0,
-            last_updated TEXT
-        )''')
-        
-        # Notifications
-        c.execute('''CREATE TABLE IF NOT EXISTS notifications (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            title TEXT,
-            message TEXT,
-            is_read INTEGER DEFAULT 0,
-            created_date TEXT
-        )''')
-        
-        # Bot settings
-        c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
-            setting_key TEXT PRIMARY KEY,
-            setting_value TEXT,
-            description TEXT,
-            updated_date TEXT
-        )''')
-        
-        # Reports
-        c.execute('''CREATE TABLE IF NOT EXISTS reports (
-            report_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            issue TEXT,
-            image_id TEXT,
-            timestamp TEXT
-        )''')
-        
-        # Support messages
-        c.execute('''CREATE TABLE IF NOT EXISTS support_messages (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            message TEXT,
-            timestamp TEXT
-        )''')
-        
-        # Daily sales
-        c.execute('''CREATE TABLE IF NOT EXISTS daily_sales (
-            id SERIAL PRIMARY KEY,
-            sale_date TEXT UNIQUE,
-            total_sales REAL,
-            total_orders INTEGER,
-            total_users INTEGER,
-            new_users INTEGER,
-            report_sent INTEGER DEFAULT 0
-        )''')
-        
-        # Default settings
-        default_settings = [
-            ('bot_name', 'Hamzzy Marketplace', 'Bot display name'),
-            ('currency_symbol', '₦', 'Currency symbol'),
-            ('min_deposit', '500', 'Minimum deposit'),
-            ('min_withdrawal', '5000', 'Minimum withdrawal'),
-            ('referral_bonus', '250', 'Referral bonus'),
-            ('low_stock_threshold', '3', 'Low stock alert threshold'),
-            ('contact_phone', CONTACT_PHONE, 'Contact phone'),
-            ('contact_email', CONTACT_EMAIL, 'Contact email'),
-            ('contact_admin', CONTACT_ADMIN, 'Contact admin'),
-            ('auto_report_time', '08:00', 'Daily report time'),
-        ]
-        for key, value, desc in default_settings:
-            c.execute('INSERT INTO bot_settings (setting_key, setting_value, description, updated_date) VALUES (%s, %s, %s, %s) ON CONFLICT (setting_key) DO NOTHING',
-                      (key, value, desc, datetime.datetime.now().isoformat()))
-        
-        # Default FB categories
-        default_fb_categories = [
-            ("local_normal", "🇳🇬 Local Nigeria FB", 2000, 0, "Local Nigerian account", 1, 1),
-            ("local_with_page", "🇳🇬 Local Nigeria FB + Page", 3500, 1, "Local account with page", 1, 2),
-            ("foreign_normal", "🌍 Foreign FB", 3000, 0, "Foreign account", 1, 3),
-            ("foreign_with_page", "🌍 Foreign FB + Page", 4500, 1, "Foreign account with page", 1, 4),
-        ]
-        for name, display, price, has_page, desc, active, order in default_fb_categories:
-            c.execute('INSERT INTO fb_categories (name, display_name, price, has_page, description, is_active, sort_order, created_date) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING',
-                      (name, display, price, has_page, desc, active, order, datetime.datetime.now().isoformat()))
-        
-        # Admin wallet
-        c.execute('SELECT COUNT(*) FROM admin_wallet')
-        if c.fetchone()[0] == 0:
-            c.execute('INSERT INTO admin_wallet (id, balance, total_earned, total_withdrawn, last_updated) VALUES (1, 0, 0, 0, %s)',
-                      (datetime.datetime.now().isoformat(),))
-        
-        # Make master admin
-        c.execute('UPDATE users SET is_admin = 1 WHERE user_id = %s', (MASTER_ADMIN_ID,))
-        c.execute('INSERT INTO users (user_id, username, first_name, referral_code, join_date, last_active, is_admin, wallet_balance) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING',
-                  (MASTER_ADMIN_ID, BOT_USERNAME, "Master Admin", f"rf_{MASTER_ADMIN_ID}", datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat(), 1, 0))
-        
-        # Create indexes
-        c.execute('CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)')
-        
-        conn.commit()
-        conn.close()
-    
-    def init_sqlite(self):
+    def init_db(self):
         c = self.cursor()
         
         # Users table with referral_bonus_given column
@@ -610,6 +368,7 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)")
         
         self.commit()
+        logger.info("Database initialized")
 
 # =================================================================================
 # CREATE DATABASE INSTANCE AND BOT
@@ -625,13 +384,13 @@ user_sessions = {}
 
 def get_setting(key: str, default: str = "") -> str:
     c = db.cursor()
-    c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = %s" if db._use_postgres else "SELECT setting_value FROM bot_settings WHERE setting_key = ?", (key,))
+    c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", (key,))
     row = c.fetchone()
     return row[0] if row else default
 
 def get_user(user_id: int) -> Optional[Dict]:
     c = db.cursor()
-    c.execute("SELECT * FROM users WHERE user_id = %s" if db._use_postgres else "SELECT * FROM users WHERE user_id = ?", (user_id,))
+    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     return dict(row) if row else None
 
@@ -652,43 +411,27 @@ def add_user(user_id: int, username: str, first_name: str) -> Dict:
         referral_code = f"rf_{user_id}"
         join_date = datetime.datetime.now().isoformat()
         is_admin_val = 1 if user_id == MASTER_ADMIN_ID else 0
-        if db._use_postgres:
-            c.execute("INSERT INTO users (user_id, username, first_name, referral_code, join_date, last_active, is_admin) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                      (user_id, username, first_name, referral_code, join_date, join_date, is_admin_val))
-        else:
-            c.execute("INSERT INTO users (user_id, username, first_name, referral_code, join_date, last_active, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                      (user_id, username, first_name, referral_code, join_date, join_date, is_admin_val))
+        c.execute("INSERT INTO users (user_id, username, first_name, referral_code, join_date, last_active, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (user_id, username, first_name, referral_code, join_date, join_date, is_admin_val))
         db.commit()
         return get_user(user_id)
-    if db._use_postgres:
-        c.execute("UPDATE users SET last_active = %s, username = %s WHERE user_id = %s", (datetime.datetime.now().isoformat(), username, user_id))
-    else:
-        c.execute("UPDATE users SET last_active = ?, username = ? WHERE user_id = ?", (datetime.datetime.now().isoformat(), username, user_id))
+    c.execute("UPDATE users SET last_active = ?, username = ? WHERE user_id = ?", (datetime.datetime.now().isoformat(), username, user_id))
     db.commit()
     return get_user(user_id)
 
 def update_wallet(user_id: int, amount: float) -> float:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT wallet_balance FROM users WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("SELECT wallet_balance FROM users WHERE user_id = ?", (user_id,))
+    c.execute("SELECT wallet_balance FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     if row is None:
-        join_date = datetime.datetime.now().isoformat()
-        if db._use_postgres:
-            c.execute("INSERT INTO users (user_id, wallet_balance, join_date, last_active) VALUES (%s, %s, %s, %s)", (user_id, 0, join_date, join_date))
-        else:
-            c.execute("INSERT OR IGNORE INTO users (user_id, wallet_balance, join_date, last_active) VALUES (?, ?, ?, ?)", (user_id, 0, join_date, join_date))
+        c.execute("INSERT OR IGNORE INTO users (user_id, wallet_balance, join_date, last_active) VALUES (?, ?, ?, ?)",
+                  (user_id, 0, datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat()))
         db.commit()
         current_balance = 0
     else:
         current_balance = row[0]
     new_balance = current_balance + amount
-    if db._use_postgres:
-        c.execute("UPDATE users SET wallet_balance = %s WHERE user_id = %s", (new_balance, user_id))
-    else:
-        c.execute("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, user_id))
+    c.execute("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, user_id))
     db.commit()
     return new_balance
 
@@ -697,10 +440,7 @@ def set_wallet(user_id: int, new_balance: float) -> float:
     if new_balance < 0:
         new_balance = 0
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET wallet_balance = %s WHERE user_id = %s", (new_balance, user_id))
-    else:
-        c.execute("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, user_id))
+    c.execute("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, user_id))
     db.commit()
     return new_balance
 
@@ -714,10 +454,7 @@ def remove_wallet(user_id: int, amount: float) -> float:
 
 def get_wallet(user_id: int) -> float:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT wallet_balance FROM users WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("SELECT wallet_balance FROM users WHERE user_id = ?", (user_id,))
+    c.execute("SELECT wallet_balance FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     return row[0] if row else 0.0
 
@@ -725,23 +462,15 @@ def add_transaction(user_id: int, amount: float, txn_type: str, reference: str, 
     c = db.cursor()
     txn_id = f"TXN{user_id}{int(time.time())}{random.randint(1000, 9999)}"
     timestamp = datetime.datetime.now().isoformat()
-    if db._use_postgres:
-        c.execute("INSERT INTO transactions (txn_id, user_id, amount, type, reference, status, timestamp, processed_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                  (txn_id, user_id, amount, txn_type, reference, status, timestamp, processed_by))
-    else:
-        c.execute("INSERT INTO transactions (txn_id, user_id, amount, type, reference, status, timestamp, processed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                  (txn_id, user_id, amount, txn_type, reference, status, timestamp, processed_by))
+    c.execute("INSERT INTO transactions (txn_id, user_id, amount, type, reference, status, timestamp, processed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (txn_id, user_id, amount, txn_type, reference, status, timestamp, processed_by))
     db.commit()
     return txn_id
 
 def add_notification(user_id: int, title: str, message: str):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("INSERT INTO notifications (user_id, title, message, created_date) VALUES (%s, %s, %s, %s)",
-                  (user_id, title, message, datetime.datetime.now().isoformat()))
-    else:
-        c.execute("INSERT INTO notifications (user_id, title, message, created_date) VALUES (?, ?, ?, ?)",
-                  (user_id, title, message, datetime.datetime.now().isoformat()))
+    c.execute("INSERT INTO notifications (user_id, title, message, created_date) VALUES (?, ?, ?, ?)",
+              (user_id, title, message, datetime.datetime.now().isoformat()))
     db.commit()
 
 def process_referral_bonus_on_purchase(user_id: int):
@@ -763,12 +492,10 @@ def process_referral_bonus_on_purchase(user_id: int):
     
     # Update referrer stats
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET total_referrals = total_referrals + 1, referral_earnings = referral_earnings + %s WHERE user_id = %s", (bonus, referrer_id))
-        c.execute("UPDATE users SET referral_bonus_given = 1 WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("UPDATE users SET total_referrals = total_referrals + 1, referral_earnings = referral_earnings + ? WHERE user_id = ?", (bonus, referrer_id))
-        c.execute("UPDATE users SET referral_bonus_given = 1 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE users SET total_referrals = total_referrals + 1, referral_earnings = referral_earnings + ? WHERE user_id = ?", (bonus, referrer_id))
+    
+    # Mark bonus as given
+    c.execute("UPDATE users SET referral_bonus_given = 1 WHERE user_id = ?", (user_id,))
     db.commit()
     
     # Notify referrer
@@ -784,56 +511,36 @@ def process_referral_bonus_on_purchase(user_id: int):
 
 def get_admin_wallet():
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT balance, total_earned, total_withdrawn FROM admin_wallet WHERE id = 1")
-    else:
-        c.execute("SELECT balance, total_earned, total_withdrawn FROM admin_wallet WHERE id = 1")
+    c.execute("SELECT balance, total_earned, total_withdrawn FROM admin_wallet WHERE id = 1")
     row = c.fetchone()
     return {'balance': row[0], 'total_earned': row[1], 'total_withdrawn': row[2]} if row else {'balance': 0, 'total_earned': 0, 'total_withdrawn': 0}
 
 def update_admin_wallet(amount: float, is_earning: bool = True):
     c = db.cursor()
     if is_earning:
-        if db._use_postgres:
-            c.execute("UPDATE admin_wallet SET balance = balance + %s, total_earned = total_earned + %s, last_updated = %s WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
-        else:
-            c.execute("UPDATE admin_wallet SET balance = balance + ?, total_earned = total_earned + ?, last_updated = ? WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
+        c.execute("UPDATE admin_wallet SET balance = balance + ?, total_earned = total_earned + ?, last_updated = ? WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
     else:
-        if db._use_postgres:
-            c.execute("UPDATE admin_wallet SET balance = balance - %s, total_withdrawn = total_withdrawn + %s, last_updated = %s WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
-        else:
-            c.execute("UPDATE admin_wallet SET balance = balance - ?, total_withdrawn = total_withdrawn + ?, last_updated = ? WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
+        c.execute("UPDATE admin_wallet SET balance = balance - ?, total_withdrawn = total_withdrawn + ?, last_updated = ? WHERE id = 1", (amount, amount, datetime.datetime.now().isoformat()))
     db.commit()
 
 def create_order(user_id: int, product_type: str, product_name: str, quantity: int, amount: float, delivery_info: str) -> str:
     c = db.cursor()
     order_id = f"ORD{user_id}{int(time.time())}{random.randint(100, 999)}"
     order_date = datetime.datetime.now().isoformat()
-    if db._use_postgres:
-        c.execute("INSERT INTO orders (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                  (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date))
-        c.execute("UPDATE users SET total_spent = total_spent + %s, total_orders = total_orders + 1 WHERE user_id = %s", (amount, user_id))
-    else:
-        c.execute("INSERT INTO orders (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                  (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date))
-        c.execute("UPDATE users SET total_spent = total_spent + ?, total_orders = total_orders + 1 WHERE user_id = ?", (amount, user_id))
+    c.execute("INSERT INTO orders (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (order_id, user_id, product_type, product_name, quantity, amount, delivery_info, order_date))
+    c.execute("UPDATE users SET total_spent = total_spent + ?, total_orders = total_orders + 1 WHERE user_id = ?", (amount, user_id))
     db.commit()
     return order_id
 
 def get_user_orders(user_id: int, limit: int = 20) -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT order_id, product_name, amount, delivery_info, order_date FROM orders WHERE user_id = %s ORDER BY order_date DESC LIMIT %s", (user_id, limit))
-    else:
-        c.execute("SELECT order_id, product_name, amount, delivery_info, order_date FROM orders WHERE user_id = ? ORDER BY order_date DESC LIMIT ?", (user_id, limit))
+    c.execute("SELECT order_id, product_name, amount, delivery_info, order_date FROM orders WHERE user_id = ? ORDER BY order_date DESC LIMIT ?", (user_id, limit))
     return [dict(row) for row in c.fetchall()]
 
 def get_user_transactions(user_id: int, limit: int = 15) -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT txn_id, amount, type, status, timestamp FROM transactions WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s", (user_id, limit))
-    else:
-        c.execute("SELECT txn_id, amount, type, status, timestamp FROM transactions WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
+    c.execute("SELECT txn_id, amount, type, status, timestamp FROM transactions WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
     return [dict(row) for row in c.fetchall()]
 
 def get_user_referral_stats(user_id: int) -> Tuple[int, float]:
@@ -844,34 +551,22 @@ def get_user_referral_stats(user_id: int) -> Tuple[int, float]:
 
 def get_referral_leaderboard(limit: int = 10) -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id, first_name, total_referrals, referral_earnings FROM users WHERE total_referrals > 0 ORDER BY total_referrals DESC LIMIT %s", (limit,))
-    else:
-        c.execute("SELECT user_id, first_name, total_referrals, referral_earnings FROM users WHERE total_referrals > 0 ORDER BY total_referrals DESC LIMIT ?", (limit,))
+    c.execute("SELECT user_id, first_name, total_referrals, referral_earnings FROM users WHERE total_referrals > 0 ORDER BY total_referrals DESC LIMIT ?", (limit,))
     return [dict(row) for row in c.fetchall()]
 
 def get_all_users(limit: int = 100) -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id, username, first_name, wallet_balance, total_spent, total_orders, join_date, is_banned, is_admin FROM users ORDER BY join_date DESC LIMIT %s", (limit,))
-    else:
-        c.execute("SELECT user_id, username, first_name, wallet_balance, total_spent, total_orders, join_date, is_banned, is_admin FROM users ORDER BY join_date DESC LIMIT ?", (limit,))
+    c.execute("SELECT user_id, username, first_name, wallet_balance, total_spent, total_orders, join_date, is_banned, is_admin FROM users ORDER BY join_date DESC LIMIT ?", (limit,))
     return [dict(row) for row in c.fetchall()]
 
 def get_all_admins() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id, username, first_name FROM users WHERE is_admin = 1")
-    else:
-        c.execute("SELECT user_id, username, first_name FROM users WHERE is_admin = 1")
+    c.execute("SELECT user_id, username, first_name FROM users WHERE is_admin = 1")
     return [dict(row) for row in c.fetchall()]
 
 def ban_user(user_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET is_banned = 1 WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
     db.commit()
     add_notification(user_id, "Account Banned", "You have been banned. Contact admin for support.")
     try:
@@ -881,10 +576,7 @@ def ban_user(user_id: int):
 
 def unban_user(user_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET is_banned = 0 WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
     db.commit()
     add_notification(user_id, "Account Unbanned", "You have been unbanned. You can now use the bot.")
     try:
@@ -894,10 +586,7 @@ def unban_user(user_id: int):
 
 def grant_admin(user_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET is_admin = 1 WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (user_id,))
     db.commit()
     add_notification(user_id, "Admin Granted", "You have been granted admin access.")
     try:
@@ -909,10 +598,7 @@ def revoke_admin(user_id: int):
     if user_id == MASTER_ADMIN_ID:
         return False
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE users SET is_admin = 0 WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("UPDATE users SET is_admin = 0 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE users SET is_admin = 0 WHERE user_id = ?", (user_id,))
     db.commit()
     add_notification(user_id, "Admin Revoked", "Your admin access has been revoked.")
     try:
@@ -923,48 +609,27 @@ def revoke_admin(user_id: int):
 
 def get_bot_stats() -> Dict:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
-        banned_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
-        admin_users = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
-        total_sales = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM orders")
-        total_orders = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM ig_stock WHERE status = 'available'")
-        ig_stock = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
-        fb_stock = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM payments WHERE status = 'pending'")
-        pending_payments = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")
-        pending_withdrawals = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE date(timestamp) = %s AND type = 'deposit' AND status = 'completed'", (datetime.date.today().isoformat(),))
-        deposits_today = c.fetchone()[0]
-    else:
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
-        banned_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
-        admin_users = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
-        total_sales = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM orders")
-        total_orders = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM ig_stock WHERE status = 'available'")
-        ig_stock = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
-        fb_stock = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM payments WHERE status = 'pending'")
-        pending_payments = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")
-        pending_withdrawals = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE date(timestamp) = ? AND type = 'deposit' AND status = 'completed'", (datetime.date.today().isoformat(),))
-        deposits_today = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
+    banned_users = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+    admin_users = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
+    total_sales = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM orders")
+    total_orders = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM ig_stock WHERE status = 'available'")
+    ig_stock = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
+    fb_stock = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM payments WHERE status = 'pending'")
+    pending_payments = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")
+    pending_withdrawals = c.fetchone()[0]
+    today = datetime.date.today().isoformat()
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE date(timestamp) = ? AND type = 'deposit' AND status = 'completed'", (today,))
+    deposits_today = c.fetchone()[0]
     return {
         'total_users': total_users, 'banned_users': banned_users, 'admin_users': admin_users,
         'total_sales': total_sales, 'total_orders': total_orders,
@@ -975,34 +640,23 @@ def get_bot_stats() -> Dict:
 def create_withdrawal(user_id: int, amount: float, bank: str, account: str, name: str) -> str:
     c = db.cursor()
     withdraw_id = f"WDR{user_id}{int(time.time())}{random.randint(100, 999)}"
-    if db._use_postgres:
-        c.execute("INSERT INTO withdrawals (withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                  (withdraw_id, user_id, amount, bank, account, name, datetime.datetime.now().isoformat()))
-    else:
-        c.execute("INSERT INTO withdrawals (withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (withdraw_id, user_id, amount, bank, account, name, datetime.datetime.now().isoformat()))
+    c.execute("INSERT INTO withdrawals (withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (withdraw_id, user_id, amount, bank, account, name, datetime.datetime.now().isoformat()))
     db.commit()
     add_notification(user_id, "Withdrawal Requested", f"Your withdrawal request of ₦{amount:,.2f} has been submitted. Admin will process it soon.")
     return withdraw_id
 
 def get_pending_withdrawals() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE status = 'pending' ORDER BY request_date DESC")
-    else:
-        c.execute("SELECT withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE status = 'pending' ORDER BY request_date DESC")
+    c.execute("SELECT withdraw_id, user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE status = 'pending' ORDER BY request_date DESC")
     return [dict(row) for row in c.fetchall()]
 
 def complete_withdrawal(withdraw_id: str, admin_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE withdrawals SET status = 'completed', processed_date = %s, processed_by = %s WHERE withdraw_id = %s",
-                  (datetime.datetime.now().isoformat(), admin_id, withdraw_id))
-    else:
-        c.execute("UPDATE withdrawals SET status = 'completed', processed_date = ?, processed_by = ? WHERE withdraw_id = ?",
-                  (datetime.datetime.now().isoformat(), admin_id, withdraw_id))
+    c.execute("UPDATE withdrawals SET status = 'completed', processed_date = ?, processed_by = ? WHERE withdraw_id = ?",
+              (datetime.datetime.now().isoformat(), admin_id, withdraw_id))
     db.commit()
-    c.execute("SELECT user_id FROM withdrawals WHERE withdraw_id = ?" if not db._use_postgres else "SELECT user_id FROM withdrawals WHERE withdraw_id = %s", (withdraw_id,))
+    c.execute("SELECT user_id FROM withdrawals WHERE withdraw_id = ?", (withdraw_id,))
     row = c.fetchone()
     if row:
         add_notification(row[0], "Withdrawal Completed", "Your withdrawal has been processed and sent to your bank account.")
@@ -1014,39 +668,25 @@ def complete_withdrawal(withdraw_id: str, admin_id: int):
 def create_payment(user_id: int, amount: float, method: str, reference: str, image_file_id: str = None) -> str:
     c = db.cursor()
     payment_id = f"PAY{user_id}{int(time.time())}{random.randint(1000, 9999)}"
-    if db._use_postgres:
-        c.execute("INSERT INTO payments (payment_id, user_id, amount, method, reference, image_file_id, status, timestamp) VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)",
-                  (payment_id, user_id, amount, method, reference, image_file_id, datetime.datetime.now().isoformat()))
-    else:
-        c.execute("INSERT INTO payments (payment_id, user_id, amount, method, reference, image_file_id, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                  (payment_id, user_id, amount, method, reference, image_file_id, datetime.datetime.now().isoformat()))
+    c.execute("INSERT INTO payments (payment_id, user_id, amount, method, reference, image_file_id, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+              (payment_id, user_id, amount, method, reference, image_file_id, datetime.datetime.now().isoformat()))
     db.commit()
     return payment_id
 
 def get_pending_payments() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT payment_id, user_id, amount, method, reference, image_file_id, timestamp FROM payments WHERE status = 'pending' ORDER BY timestamp ASC")
-    else:
-        c.execute("SELECT payment_id, user_id, amount, method, reference, image_file_id, timestamp FROM payments WHERE status = 'pending' ORDER BY timestamp ASC")
+    c.execute("SELECT payment_id, user_id, amount, method, reference, image_file_id, timestamp FROM payments WHERE status = 'pending' ORDER BY timestamp ASC")
     return [dict(row) for row in c.fetchall()]
 
 def confirm_payment(payment_id: str, admin_id: int) -> Tuple[bool, int, float]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id, amount FROM payments WHERE payment_id = %s AND status = 'pending'", (payment_id,))
-    else:
-        c.execute("SELECT user_id, amount FROM payments WHERE payment_id = ? AND status = 'pending'", (payment_id,))
+    c.execute("SELECT user_id, amount FROM payments WHERE payment_id = ? AND status = 'pending'", (payment_id,))
     result = c.fetchone()
     if not result:
         return False, None, None
     user_id, amount = result
-    if db._use_postgres:
-        c.execute("UPDATE payments SET status = 'completed', processed_by = %s, processed_date = %s WHERE payment_id = %s",
-                  (admin_id, datetime.datetime.now().isoformat(), payment_id))
-    else:
-        c.execute("UPDATE payments SET status = 'completed', processed_by = ?, processed_date = ? WHERE payment_id = ?",
-                  (admin_id, datetime.datetime.now().isoformat(), payment_id))
+    c.execute("UPDATE payments SET status = 'completed', processed_by = ?, processed_date = ? WHERE payment_id = ?",
+              (admin_id, datetime.datetime.now().isoformat(), payment_id))
     new_balance = update_wallet(user_id, amount)
     add_transaction(user_id, amount, 'deposit', payment_id, 'completed', admin_id)
     update_admin_wallet(amount, True)
@@ -1063,14 +703,10 @@ def confirm_payment(payment_id: str, admin_id: int) -> Tuple[bool, int, float]:
 
 def reject_payment(payment_id: str, admin_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE payments SET status = 'rejected', processed_by = %s, processed_date = %s WHERE payment_id = %s",
-                  (admin_id, datetime.datetime.now().isoformat(), payment_id))
-    else:
-        c.execute("UPDATE payments SET status = 'rejected', processed_by = ?, processed_date = ? WHERE payment_id = ?",
-                  (admin_id, datetime.datetime.now().isoformat(), payment_id))
+    c.execute("UPDATE payments SET status = 'rejected', processed_by = ?, processed_date = ? WHERE payment_id = ?",
+              (admin_id, datetime.datetime.now().isoformat(), payment_id))
     db.commit()
-    c.execute("SELECT user_id FROM payments WHERE payment_id = ?" if not db._use_postgres else "SELECT user_id FROM payments WHERE payment_id = %s", (payment_id,))
+    c.execute("SELECT user_id FROM payments WHERE payment_id = ?", (payment_id,))
     row = c.fetchone()
     if row:
         add_notification(row[0], "Payment Rejected", "Your payment was rejected. Please submit a clear screenshot.")
@@ -1086,18 +722,12 @@ def check_low_stock():
     symbol = get_setting('currency_symbol', '₦')
     
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT followers_count, COUNT(*) as stock FROM ig_stock WHERE status = 'available' GROUP BY followers_count")
-    else:
-        c.execute("SELECT followers_count, COUNT(*) as stock FROM ig_stock WHERE status = 'available' GROUP BY followers_count")
+    c.execute("SELECT followers_count, COUNT(*) as stock FROM ig_stock WHERE status = 'available' GROUP BY followers_count")
     for row in c.fetchall():
         if row['stock'] < threshold:
             alerts.append(f"🔗 IG: {row['followers_count']} followers - Only {row['stock']} left")
     
-    if db._use_postgres:
-        c.execute("SELECT fc.display_name, COUNT(*) as stock FROM fb_stock fs JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' GROUP BY fc.display_name")
-    else:
-        c.execute("SELECT fc.display_name, COUNT(*) as stock FROM fb_stock fs JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' GROUP BY fc.display_name")
+    c.execute("SELECT fc.display_name, COUNT(*) as stock FROM fb_stock fs JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' GROUP BY fc.display_name")
     for row in c.fetchall():
         if row['stock'] < threshold:
             alerts.append(f"📘 FB: {row['display_name']} - Only {row['stock']} left")
@@ -1115,31 +745,22 @@ def generate_daily_report():
     today = datetime.date.today().isoformat()
     c = db.cursor()
     
-    if db._use_postgres:
-        c.execute("SELECT COUNT(*) FROM users WHERE date(join_date) = %s", (today,))
-        new_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE date(order_date) = %s", (today,))
-        today_sales = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM orders WHERE date(order_date) = %s", (today,))
-        today_orders = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
-        total_sales = c.fetchone()[0]
-        c.execute("SELECT report_sent FROM daily_sales WHERE sale_date = %s", (today,))
-    else:
-        c.execute("SELECT COUNT(*) FROM users WHERE date(join_date) = ?", (today,))
-        new_users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE date(order_date) = ?", (today,))
-        today_sales = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM orders WHERE date(order_date) = ?", (today,))
-        today_orders = c.fetchone()[0]
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
-        total_sales = c.fetchone()[0]
-        c.execute("SELECT report_sent FROM daily_sales WHERE sale_date = ?", (today,))
+    c.execute("SELECT COUNT(*) FROM users WHERE date(join_date) = ?", (today,))
+    new_users = c.fetchone()[0]
     
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE date(order_date) = ?", (today,))
+    today_sales = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE date(order_date) = ?", (today,))
+    today_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM orders")
+    total_sales = c.fetchone()[0]
+    
+    c.execute("SELECT report_sent FROM daily_sales WHERE sale_date = ?", (today,))
     existing = c.fetchone()
     
     if not existing or existing['report_sent'] == 0:
@@ -1159,28 +780,17 @@ def generate_daily_report():
                 pass
         
         if existing:
-            if db._use_postgres:
-                c.execute("UPDATE daily_sales SET total_sales = %s, total_orders = %s, total_users = %s, new_users = %s, report_sent = 1 WHERE sale_date = %s",
-                          (today_sales, today_orders, total_users, new_users, today))
-            else:
-                c.execute("UPDATE daily_sales SET total_sales = ?, total_orders = ?, total_users = ?, new_users = ?, report_sent = 1 WHERE sale_date = ?",
-                          (today_sales, today_orders, total_users, new_users, today))
+            c.execute("UPDATE daily_sales SET total_sales = ?, total_orders = ?, total_users = ?, new_users = ?, report_sent = 1 WHERE sale_date = ?",
+                      (today_sales, today_orders, total_users, new_users, today))
         else:
-            if db._use_postgres:
-                c.execute("INSERT INTO daily_sales (sale_date, total_sales, total_orders, total_users, new_users, report_sent) VALUES (%s, %s, %s, %s, %s, 1)",
-                          (today, today_sales, today_orders, total_users, new_users))
-            else:
-                c.execute("INSERT INTO daily_sales (sale_date, total_sales, total_orders, total_users, new_users, report_sent) VALUES (?, ?, ?, ?, ?, 1)",
-                          (today, today_sales, today_orders, total_users, new_users))
+            c.execute("INSERT INTO daily_sales (sale_date, total_sales, total_orders, total_users, new_users, report_sent) VALUES (?, ?, ?, ?, ?, 1)",
+                      (today, today_sales, today_orders, total_users, new_users))
         db.commit()
 
 def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     """Send image broadcast to all users"""
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id FROM users WHERE is_banned = 0")
-    else:
-        c.execute("SELECT user_id FROM users WHERE is_banned = 0")
+    c.execute("SELECT user_id FROM users WHERE is_banned = 0")
     users = [row[0] for row in c.fetchall()]
     success = 0
     failed = 0
@@ -1264,12 +874,8 @@ def extract_emails_from_text(text: str) -> List[Dict]:
 def add_ig_stock(username: str, password: str, followers: int, price: float, admin_id: int, has_pass: bool = False) -> bool:
     c = db.cursor()
     try:
-        if db._use_postgres:
-            c.execute("INSERT INTO ig_stock (ig_username, password, has_password, followers_count, price, added_by, added_date, status) VALUES (%s, %s, %s, %s, %s, %s, %s, 'available')",
-                      (username, password if has_pass else None, 1 if has_pass else 0, followers, price, admin_id, datetime.datetime.now().isoformat()))
-        else:
-            c.execute("INSERT INTO ig_stock (ig_username, password, has_password, followers_count, price, added_by, added_date, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'available')",
-                      (username, password if has_pass else None, 1 if has_pass else 0, followers, price, admin_id, datetime.datetime.now().isoformat()))
+        c.execute("INSERT INTO ig_stock (ig_username, password, has_password, followers_count, price, added_by, added_date, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'available')",
+                  (username, password if has_pass else None, 1 if has_pass else 0, followers, price, admin_id, datetime.datetime.now().isoformat()))
         db.commit()
         return True
     except:
@@ -1278,64 +884,39 @@ def add_ig_stock(username: str, password: str, followers: int, price: float, adm
 def get_available_ig(followers_min: int, followers_max: int, require_password: bool = False) -> Optional[Dict]:
     c = db.cursor()
     if require_password:
-        if db._use_postgres:
-            c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN %s AND %s AND has_password = 1 AND status = 'available' LIMIT 1", (followers_min, followers_max))
-        else:
-            c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND has_password = 1 AND status = 'available' LIMIT 1", (followers_min, followers_max))
+        c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND has_password = 1 AND status = 'available' LIMIT 1", (followers_min, followers_max))
     else:
-        if db._use_postgres:
-            c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN %s AND %s AND status = 'available' LIMIT 1", (followers_min, followers_max))
-        else:
-            c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND status = 'available' LIMIT 1", (followers_min, followers_max))
+        c.execute("SELECT id, ig_username, password, price FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND status = 'available' LIMIT 1", (followers_min, followers_max))
     row = c.fetchone()
     return dict(row) if row else None
 
 def get_ig_stock_count(followers_min: int, followers_max: int, require_password: bool = False) -> int:
     c = db.cursor()
     if require_password:
-        if db._use_postgres:
-            c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN %s AND %s AND has_password = 1 AND status = 'available'", (followers_min, followers_max))
-        else:
-            c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND has_password = 1 AND status = 'available'", (followers_min, followers_max))
+        c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND has_password = 1 AND status = 'available'", (followers_min, followers_max))
     else:
-        if db._use_postgres:
-            c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN %s AND %s AND status = 'available'", (followers_min, followers_max))
-        else:
-            c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND status = 'available'", (followers_min, followers_max))
+        c.execute("SELECT COUNT(*) FROM ig_stock WHERE followers_count BETWEEN ? AND ? AND status = 'available'", (followers_min, followers_max))
     return c.fetchone()[0]
 
 def get_all_ig_stock() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT id, ig_username, has_password, followers_count, price, status FROM ig_stock ORDER BY id DESC")
-    else:
-        c.execute("SELECT id, ig_username, has_password, followers_count, price, status FROM ig_stock ORDER BY id DESC")
+    c.execute("SELECT id, ig_username, has_password, followers_count, price, status FROM ig_stock ORDER BY id DESC")
     return [dict(row) for row in c.fetchall()]
 
 def mark_ig_sold(ig_id: int, user_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE ig_stock SET status = 'sold', sold_date = %s, sold_to = %s WHERE id = %s",
-                  (datetime.datetime.now().isoformat(), user_id, ig_id))
-    else:
-        c.execute("UPDATE ig_stock SET status = 'sold', sold_date = ?, sold_to = ? WHERE id = ?",
-                  (datetime.datetime.now().isoformat(), user_id, ig_id))
+    c.execute("UPDATE ig_stock SET status = 'sold', sold_date = ?, sold_to = ? WHERE id = ?",
+              (datetime.datetime.now().isoformat(), user_id, ig_id))
     db.commit()
 
 def delete_ig_stock(stock_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("DELETE FROM ig_stock WHERE id = %s", (stock_id,))
-    else:
-        c.execute("DELETE FROM ig_stock WHERE id = ?", (stock_id,))
+    c.execute("DELETE FROM ig_stock WHERE id = ?", (stock_id,))
     db.commit()
 
 def delete_all_ig_stock():
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("DELETE FROM ig_stock")
-    else:
-        c.execute("DELETE FROM ig_stock")
+    c.execute("DELETE FROM ig_stock")
     db.commit()
 
 # =================================================================================
@@ -1344,30 +925,20 @@ def delete_all_ig_stock():
 
 def get_all_fb_categories() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT * FROM fb_categories WHERE is_active = 1 ORDER BY sort_order")
-    else:
-        c.execute("SELECT * FROM fb_categories WHERE is_active = 1 ORDER BY sort_order")
+    c.execute("SELECT * FROM fb_categories WHERE is_active = 1 ORDER BY sort_order")
     return [dict(row) for row in c.fetchall()]
 
 def get_fb_category_by_id(cat_id: int) -> Optional[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT * FROM fb_categories WHERE id = %s", (cat_id,))
-    else:
-        c.execute("SELECT * FROM fb_categories WHERE id = ?", (cat_id,))
+    c.execute("SELECT * FROM fb_categories WHERE id = ?", (cat_id,))
     row = c.fetchone()
     return dict(row) if row else None
 
 def add_fb_category(name: str, display_name: str, price: float, has_page: int = 0, description: str = None) -> bool:
     c = db.cursor()
     try:
-        if db._use_postgres:
-            c.execute("INSERT INTO fb_categories (name, display_name, price, has_page, description, is_active, sort_order, created_date) VALUES (%s, %s, %s, %s, %s, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM fb_categories), %s)",
-                      (name, display_name, price, has_page, description or display_name, datetime.datetime.now().isoformat()))
-        else:
-            c.execute("INSERT INTO fb_categories (name, display_name, price, has_page, description, is_active, sort_order, created_date) VALUES (?, ?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM fb_categories), ?)",
-                      (name, display_name, price, has_page, description or display_name, datetime.datetime.now().isoformat()))
+        c.execute("INSERT INTO fb_categories (name, display_name, price, has_page, description, is_active, sort_order, created_date) VALUES (?, ?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM fb_categories), ?)",
+                  (name, display_name, price, has_page, description or display_name, datetime.datetime.now().isoformat()))
         db.commit()
         return True
     except:
@@ -1376,10 +947,7 @@ def add_fb_category(name: str, display_name: str, price: float, has_page: int = 
 def update_fb_category_price(cat_id: int, new_price: float) -> bool:
     c = db.cursor()
     try:
-        if db._use_postgres:
-            c.execute("UPDATE fb_categories SET price = %s, updated_date = %s WHERE id = %s", (new_price, datetime.datetime.now().isoformat(), cat_id))
-        else:
-            c.execute("UPDATE fb_categories SET price = ?, updated_date = ? WHERE id = ?", (new_price, datetime.datetime.now().isoformat(), cat_id))
+        c.execute("UPDATE fb_categories SET price = ?, updated_date = ? WHERE id = ?", (new_price, datetime.datetime.now().isoformat(), cat_id))
         db.commit()
         return True
     except:
@@ -1389,12 +957,8 @@ def delete_fb_category(cat_id: int) -> bool:
     c = db.cursor()
     try:
         # First delete all FB stock in this category
-        if db._use_postgres:
-            c.execute("DELETE FROM fb_stock WHERE category_id = %s", (cat_id,))
-            c.execute("DELETE FROM fb_categories WHERE id = %s", (cat_id,))
-        else:
-            c.execute("DELETE FROM fb_stock WHERE category_id = ?", (cat_id,))
-            c.execute("DELETE FROM fb_categories WHERE id = ?", (cat_id,))
+        c.execute("DELETE FROM fb_stock WHERE category_id = ?", (cat_id,))
+        c.execute("DELETE FROM fb_categories WHERE id = ?", (cat_id,))
         db.commit()
         return True
     except:
@@ -1403,23 +967,14 @@ def delete_fb_category(cat_id: int) -> bool:
 def get_fb_stock_count(category_id: int = None) -> int:
     c = db.cursor()
     if category_id:
-        if db._use_postgres:
-            c.execute("SELECT COUNT(*) FROM fb_stock WHERE category_id = %s AND status = 'available'", (category_id,))
-        else:
-            c.execute("SELECT COUNT(*) FROM fb_stock WHERE category_id = ? AND status = 'available'", (category_id,))
+        c.execute("SELECT COUNT(*) FROM fb_stock WHERE category_id = ? AND status = 'available'", (category_id,))
     else:
-        if db._use_postgres:
-            c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
-        else:
-            c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
+        c.execute("SELECT COUNT(*) FROM fb_stock WHERE status = 'available'")
     return c.fetchone()[0]
 
 def get_available_fb_account(category_id: int) -> Optional[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT id, email, password, account_age, price, screenshot_file_ids FROM fb_stock WHERE category_id = %s AND status = 'available' LIMIT 1", (category_id,))
-    else:
-        c.execute("SELECT id, email, password, account_age, price, screenshot_file_ids FROM fb_stock WHERE category_id = ? AND status = 'available' LIMIT 1", (category_id,))
+    c.execute("SELECT id, email, password, account_age, price, screenshot_file_ids FROM fb_stock WHERE category_id = ? AND status = 'available' LIMIT 1", (category_id,))
     row = c.fetchone()
     return dict(row) if row else None
 
@@ -1429,12 +984,8 @@ def add_fb_stock(email: str, password: str, category_id: int, account_age: str, 
         cat = get_fb_category_by_id(category_id)
         price = cat['price'] if cat else 0
     try:
-        if db._use_postgres:
-            c.execute("INSERT INTO fb_stock (email, password, category_id, account_age, has_screenshot, screenshot_file_ids, price, added_by, added_date, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'available')",
-                      (email, password, category_id, account_age, 1 if screenshot_ids else 0, screenshot_ids, price, admin_id, datetime.datetime.now().isoformat()))
-        else:
-            c.execute("INSERT INTO fb_stock (email, password, category_id, account_age, has_screenshot, screenshot_file_ids, price, added_by, added_date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')",
-                      (email, password, category_id, account_age, 1 if screenshot_ids else 0, screenshot_ids, price, admin_id, datetime.datetime.now().isoformat()))
+        c.execute("INSERT INTO fb_stock (email, password, category_id, account_age, has_screenshot, screenshot_file_ids, price, added_by, added_date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')",
+                  (email, password, category_id, account_age, 1 if screenshot_ids else 0, screenshot_ids, price, admin_id, datetime.datetime.now().isoformat()))
         db.commit()
         return True
     except Exception as e:
@@ -1443,36 +994,23 @@ def add_fb_stock(email: str, password: str, category_id: int, account_age: str, 
 
 def get_all_fb_stock() -> List[Dict]:
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT fs.*, fc.display_name as category_name FROM fb_stock fs LEFT JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' ORDER BY fs.added_date DESC LIMIT 100")
-    else:
-        c.execute("SELECT fs.*, fc.display_name as category_name FROM fb_stock fs LEFT JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' ORDER BY fs.added_date DESC LIMIT 100")
+    c.execute("SELECT fs.*, fc.display_name as category_name FROM fb_stock fs LEFT JOIN fb_categories fc ON fs.category_id = fc.id WHERE fs.status = 'available' ORDER BY fs.added_date DESC LIMIT 100")
     return [dict(row) for row in c.fetchall()]
 
 def delete_fb_stock(stock_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("DELETE FROM fb_stock WHERE id = %s", (stock_id,))
-    else:
-        c.execute("DELETE FROM fb_stock WHERE id = ?", (stock_id,))
+    c.execute("DELETE FROM fb_stock WHERE id = ?", (stock_id,))
     db.commit()
 
 def delete_all_fb_stock():
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("DELETE FROM fb_stock")
-    else:
-        c.execute("DELETE FROM fb_stock")
+    c.execute("DELETE FROM fb_stock")
     db.commit()
 
 def mark_fb_sold(account_id: int, user_id: int):
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("UPDATE fb_stock SET status = 'sold', sold_date = %s, sold_to = %s WHERE id = %s",
-                  (datetime.datetime.now().isoformat(), user_id, account_id))
-    else:
-        c.execute("UPDATE fb_stock SET status = 'sold', sold_date = ?, sold_to = ? WHERE id = ?",
-                  (datetime.datetime.now().isoformat(), user_id, account_id))
+    c.execute("UPDATE fb_stock SET status = 'sold', sold_date = ?, sold_to = ? WHERE id = ?",
+              (datetime.datetime.now().isoformat(), user_id, account_id))
     db.commit()
 
 # =================================================================================
@@ -1624,10 +1162,7 @@ def cmd_start(message):
         
         # Check if it's a valid referral code
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("SELECT user_id FROM users WHERE referral_code = %s", (ref_code,))
-        else:
-            c.execute("SELECT user_id FROM users WHERE referral_code = ?", (ref_code,))
+        c.execute("SELECT user_id FROM users WHERE referral_code = ?", (ref_code,))
         referrer = c.fetchone()
         
         if referrer and referrer[0] != user_id:
@@ -1640,10 +1175,7 @@ def cmd_start(message):
     # Save referral ONLY if not already referred
     if referred_by and not user.get('referred_by'):
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("UPDATE users SET referred_by = %s WHERE user_id = %s", (referred_by, user_id))
-        else:
-            c.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referred_by, user_id))
+        c.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referred_by, user_id))
         db.commit()
         print(f"Referral saved: {referred_by} referred {user_id}")
     
@@ -1713,10 +1245,7 @@ def cmd_broadcast(message):
         bot.reply_to(message, "📝 USAGE: /broadcast MESSAGE", parse_mode='HTML')
         return
     c = db.cursor()
-    if db._use_postgres:
-        c.execute("SELECT user_id FROM users WHERE is_banned = 0")
-    else:
-        c.execute("SELECT user_id FROM users WHERE is_banned = 0")
+    c.execute("SELECT user_id FROM users WHERE is_banned = 0")
     users = [row[0] for row in c.fetchall()]
     success = 0
     for uid in users:
@@ -1822,13 +1351,10 @@ def cmd_backup(message):
         return
     backup_name = f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     backup_path = os.path.join("backups", backup_name)
-    if not db._use_postgres:
-        shutil.copy2('marketplace.db', backup_path)
-        with open(backup_path, 'rb') as f:
-            bot.send_document(message.from_user.id, f, caption=f"💾 DATABASE BACKUP\n\n{backup_name}", parse_mode='HTML')
-        bot.reply_to(message, "✅ BACKUP CREATED AND SENT!", parse_mode='HTML')
-    else:
-        bot.reply_to(message, "✅ PostgreSQL database - backup not needed (data persists)", parse_mode='HTML')
+    shutil.copy2('marketplace.db', backup_path)
+    with open(backup_path, 'rb') as f:
+        bot.send_document(message.from_user.id, f, caption=f"💾 DATABASE BACKUP\n\n{backup_name}", parse_mode='HTML')
+    bot.reply_to(message, "✅ BACKUP CREATED AND SENT!", parse_mode='HTML')
 
 # =================================================================================
 # PAYMENT FLOW HANDLERS
@@ -2136,10 +1662,7 @@ Click CONFIRM to purchase.
         cat_id = int(parts[5])
         
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("SELECT * FROM fb_stock WHERE id = %s AND status = 'available'", (fb_id,))
-        else:
-            c.execute("SELECT * FROM fb_stock WHERE id = ? AND status = 'available'", (fb_id,))
+        c.execute("SELECT * FROM fb_stock WHERE id = ? AND status = 'available'", (fb_id,))
         fb_data = c.fetchone()
         if not fb_data:
             bot.answer_callback_query(call.id, "❌ Account not available!", show_alert=True)
@@ -2189,7 +1712,8 @@ Click CONFIRM to purchase.
         bot.send_message(call.message.chat.id, delivery, parse_mode='HTML')
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.answer_callback_query(call.id, "✅ Purchase successful!")
-        return    
+        return
+    
     # ========== ADMIN IG MANAGEMENT ==========
     if data == "admin_ig":
         if not is_admin(user_id):
@@ -2474,10 +1998,7 @@ Click CONFIRM to purchase.
             return
         payment_id = data.replace("view_payment_", "")
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("SELECT user_id, amount, method, image_file_id, timestamp FROM payments WHERE payment_id = %s", (payment_id,))
-        else:
-            c.execute("SELECT user_id, amount, method, image_file_id, timestamp FROM payments WHERE payment_id = ?", (payment_id,))
+        c.execute("SELECT user_id, amount, method, image_file_id, timestamp FROM payments WHERE payment_id = ?", (payment_id,))
         payment = c.fetchone()
         if not payment:
             bot.answer_callback_query(call.id, "Payment not found!", show_alert=True)
@@ -2504,11 +2025,7 @@ Click CONFIRM to purchase.
         success, credited_user, amount = confirm_payment(payment_id, user_id)
         if success:
             bot.answer_callback_query(call.id, f"✅ Payment confirmed! {symbol}{amount:,.2f} added.", show_alert=True)
-            if call.message.photo:
-                bot.send_message(call.message.chat.id, f"✅ PAYMENT CONFIRMED!\n\nUser credited: {symbol}{amount:,.2f}", parse_mode='HTML')
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            else:
-                bot.edit_message_caption(f"✅ PAYMENT CONFIRMED!\n\nUser credited: {symbol}{amount:,.2f}", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+            bot.edit_message_caption(f"✅ PAYMENT CONFIRMED!\n\nUser credited: {symbol}{amount:,.2f}", call.message.chat.id, call.message.message_id, parse_mode='HTML')
         else:
             bot.answer_callback_query(call.id, "❌ Payment already processed!", show_alert=True)
         return
@@ -2520,11 +2037,7 @@ Click CONFIRM to purchase.
         payment_id = data.replace("reject_payment_", "")
         reject_payment(payment_id, user_id)
         bot.answer_callback_query(call.id, "❌ Payment rejected!", show_alert=True)
-        if call.message.photo:
-            bot.send_message(call.message.chat.id, "❌ PAYMENT REJECTED", parse_mode='HTML')
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        else:
-            bot.edit_message_caption("❌ PAYMENT REJECTED", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        bot.edit_message_caption("❌ PAYMENT REJECTED", call.message.chat.id, call.message.message_id, parse_mode='HTML')
         return
     
     # ========== ADMIN WITHDRAWALS ==========
@@ -2549,10 +2062,7 @@ Click CONFIRM to purchase.
             return
         withdraw_id = data.replace("view_withdrawal_", "")
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("SELECT user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE withdraw_id = %s", (withdraw_id,))
-        else:
-            c.execute("SELECT user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE withdraw_id = ?", (withdraw_id,))
+        c.execute("SELECT user_id, amount, bank_name, account_number, account_name, request_date FROM withdrawals WHERE withdraw_id = ?", (withdraw_id,))
         wd = c.fetchone()
         if not wd:
             bot.answer_callback_query(call.id, "Withdrawal not found!", show_alert=True)
@@ -2674,13 +2184,10 @@ Click CONFIRM to purchase.
             return
         backup_name = f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
         backup_path = os.path.join("backups", backup_name)
-        if not db._use_postgres:
-            shutil.copy2('marketplace.db', backup_path)
-            with open(backup_path, 'rb') as f:
-                bot.send_document(user_id, f, caption=f"💾 DATABASE BACKUP\n\n{backup_name}", parse_mode='HTML')
-            bot.edit_message_text("✅ BACKUP CREATED AND SENT!", call.message.chat.id, call.message.message_id, parse_mode='HTML')
-        else:
-            bot.edit_message_text("✅ PostgreSQL database - backup not needed (data persists)", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        shutil.copy2('marketplace.db', backup_path)
+        with open(backup_path, 'rb') as f:
+            bot.send_document(user_id, f, caption=f"💾 DATABASE BACKUP\n\n{backup_name}", parse_mode='HTML')
+        bot.edit_message_text("✅ BACKUP CREATED AND SENT!", call.message.chat.id, call.message.message_id, parse_mode='HTML')
         return
     
     # ========== FB CONTINUE UPLOAD ==========
@@ -3035,12 +2542,8 @@ def handle_message(message):
             img_id = message.photo[-1].file_id if message.photo else None
             report_id = f"RPT{user_id}{int(time.time())}{random.randint(100,999)}"
             c = db.cursor()
-            if db._use_postgres:
-                c.execute("INSERT INTO reports (report_id, user_id, issue, image_id, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                          (report_id, user_id, issue, img_id, datetime.datetime.now().isoformat()))
-            else:
-                c.execute("INSERT INTO reports (report_id, user_id, issue, image_id, timestamp) VALUES (?, ?, ?, ?, ?)",
-                          (report_id, user_id, issue, img_id, datetime.datetime.now().isoformat()))
+            c.execute("INSERT INTO reports (report_id, user_id, issue, image_id, timestamp) VALUES (?, ?, ?, ?, ?)",
+                      (report_id, user_id, issue, img_id, datetime.datetime.now().isoformat()))
             db.commit()
             bot.reply_to(message, f"✅ REPORT SUBMITTED!\n\n🆔 ID: {report_id}\n\nAdmin will review.\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
             for admin in [MASTER_ADMIN_ID]:
@@ -3060,12 +2563,8 @@ def handle_message(message):
                 del user_sessions[user_id]
                 return
             c = db.cursor()
-            if db._use_postgres:
-                c.execute("INSERT INTO support_messages (user_id, message, timestamp) VALUES (%s, %s, %s)",
-                          (user_id, text, datetime.datetime.now().isoformat()))
-            else:
-                c.execute("INSERT INTO support_messages (user_id, message, timestamp) VALUES (?, ?, ?)",
-                          (user_id, text, datetime.datetime.now().isoformat()))
+            c.execute("INSERT INTO support_messages (user_id, message, timestamp) VALUES (?, ?, ?)",
+                      (user_id, text, datetime.datetime.now().isoformat()))
             db.commit()
             bot.reply_to(message, f"🤖 SUPPORT\n\nWe'll get back to you soon.\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
             for admin in [MASTER_ADMIN_ID]:
@@ -3082,10 +2581,7 @@ def handle_message(message):
                 del user_sessions[user_id]
                 return
             c = db.cursor()
-            if db._use_postgres:
-                c.execute("SELECT user_id FROM users WHERE is_banned = 0")
-            else:
-                c.execute("SELECT user_id FROM users WHERE is_banned = 0")
+            c.execute("SELECT user_id FROM users WHERE is_banned = 0")
             users = [row[0] for row in c.fetchall()]
             success = 0
             for uid in users:
@@ -3278,10 +2774,7 @@ def handle_message(message):
             bot.reply_to(message, msg, parse_mode='HTML')
     elif text == "🔔 NOTIFICATIONS":
         c = db.cursor()
-        if db._use_postgres:
-            c.execute("SELECT id, title, message, created_date FROM notifications WHERE user_id = %s AND is_read = 0 ORDER BY created_date DESC LIMIT 10", (user_id,))
-        else:
-            c.execute("SELECT id, title, message, created_date FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_date DESC LIMIT 10", (user_id,))
+        c.execute("SELECT id, title, message, created_date FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_date DESC LIMIT 10", (user_id,))
         notifs = c.fetchall()
         if not notifs:
             bot.reply_to(message, "🔔 NO NEW NOTIFICATIONS!\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
@@ -3289,10 +2782,7 @@ def handle_message(message):
             msg = "🔔 YOUR NOTIFICATIONS\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             for n in notifs:
                 msg += f"📌 {n['title']}\n{n['message'][:200]}\n📅 {n['created_date'][:16]}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                if db._use_postgres:
-                    c.execute("UPDATE notifications SET is_read = 1 WHERE id = %s", (n['id'],))
-                else:
-                    c.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (n['id'],))
+                c.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (n['id'],))
             db.commit()
             msg += f"💎 {MY_SIGNATURE}"
             bot.reply_to(message, msg, parse_mode='HTML')
