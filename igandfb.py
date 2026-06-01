@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+/#!/usr/bin/env python3
 """
 HAMZZY MARKETPLACE BOT - COMPLETE PROFESSIONAL VERSION
 All features working: BUY IG, BUY FACEBOOK, Wallet Control, Referrals,
@@ -368,6 +368,9 @@ class Database:
 # =================================================================================
 # HELPER FUNCTIONS
 # =================================================================================
+db = Database()
+bot = telebot.TeleBot(BOT_TOKEN)
+user_sessions = {}
 
 def get_setting(key: str, default: str = "") -> str:
     c = db.cursor()
