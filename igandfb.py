@@ -13,8 +13,6 @@ import telebot
 from telebot import types
 import sqlite3
 import os  # ← MAKE SURE THIS IS PRESENT
-import psycopg2  # ← ADD THIS
-from psycopg2.extras import RealDictCursor  # ← ADD THIS
 import time
 import datetime
 import json
@@ -100,13 +98,8 @@ logger = logging.getLogger(__name__)
 # DATABASE
 # =================================================================================
 
-import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 class Database:
     _instance = None
-    _use_postgres = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -118,36 +111,20 @@ class Database:
         if self._initialized:
             return
         self._initialized = True
-        
-        # Check if running on Railway (has DATABASE_URL)
-        self._use_postgres = os.environ.get('DATABASE_URL') is not None
-        
-        if self._use_postgres:
-            self.conn = None
-            self.init_postgres()
-        else:
-            self.conn = None
-            self.init_sqlite()
+        self.conn = None
+        self.init_db()
     
     def connect(self):
-        if self._use_postgres:
-            if self.conn is None or self.conn.closed:
-                self.conn = psycopg2.connect(os.environ.get('DATABASE_URL'), cursor_factory=RealDictCursor)
-            return self.conn
-        else:
-            if self.conn is None:
-                self.conn = sqlite3.connect('marketplace.db', check_same_thread=False, timeout=30)
-                self.conn.row_factory = sqlite3.Row
-                self.conn.execute("PRAGMA synchronous = OFF")
-                self.conn.execute("PRAGMA journal_mode = WAL")
-                self.conn.execute("PRAGMA cache_size = 10000")
-            return self.conn
+        if self.conn is None:
+            self.conn = sqlite3.connect('marketplace.db', check_same_thread=False, timeout=30)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA synchronous = OFF")
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA cache_size = 10000")
+        return self.conn
     
     def cursor(self):
-        if self._use_postgres:
-            return self.connect().cursor()
-        else:
-            return self.connect().cursor()
+        return self.connect().cursor()
     
     def commit(self):
         if self.conn:
@@ -158,234 +135,7 @@ class Database:
             self.conn.close()
             self.conn = None
     
-    def init_postgres(self):
-        conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-        c = conn.cursor()
-        
-        # Users table
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            wallet_balance REAL DEFAULT 0,
-            referral_code TEXT UNIQUE,
-            referred_by BIGINT,
-            total_referrals INTEGER DEFAULT 0,
-            referral_earnings REAL DEFAULT 0,
-            referral_bonus_given INTEGER DEFAULT 0,
-            join_date TEXT,
-            last_active TEXT,
-            total_spent REAL DEFAULT 0,
-            total_orders INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0,
-            is_admin INTEGER DEFAULT 0
-        )''')
-        
-        # IG STOCK
-        c.execute('''CREATE TABLE IF NOT EXISTS ig_stock (
-            id SERIAL PRIMARY KEY,
-            ig_username TEXT UNIQUE,
-            password TEXT,
-            has_password INTEGER DEFAULT 0,
-            followers_count INTEGER,
-            price REAL,
-            status TEXT DEFAULT 'available',
-            added_by BIGINT,
-            added_date TEXT,
-            sold_date TEXT,
-            sold_to BIGINT
-        )''')
-        
-        # FB CATEGORIES
-        c.execute('''CREATE TABLE IF NOT EXISTS fb_categories (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE,
-            display_name TEXT,
-            price REAL,
-            has_page INTEGER DEFAULT 0,
-            description TEXT,
-            is_active INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_date TEXT,
-            updated_date TEXT
-        )''')
-        
-        # FB STOCK
-        c.execute('''CREATE TABLE IF NOT EXISTS fb_stock (
-            id SERIAL PRIMARY KEY,
-            email TEXT,
-            password TEXT,
-            category_id INTEGER,
-            account_age TEXT,
-            has_screenshot INTEGER DEFAULT 0,
-            screenshot_file_ids TEXT,
-            price REAL,
-            status TEXT DEFAULT 'available',
-            added_by BIGINT,
-            added_date TEXT,
-            sold_date TEXT,
-            sold_to BIGINT
-        )''')
-        
-        # Orders
-        c.execute('''CREATE TABLE IF NOT EXISTS orders (
-            order_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            product_type TEXT,
-            product_name TEXT,
-            quantity INTEGER,
-            amount REAL,
-            delivery_info TEXT,
-            order_date TEXT,
-            status TEXT DEFAULT 'completed'
-        )''')
-        
-        # Transactions
-        c.execute('''CREATE TABLE IF NOT EXISTS transactions (
-            txn_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            type TEXT,
-            reference TEXT,
-            status TEXT,
-            timestamp TEXT,
-            processed_by BIGINT
-        )''')
-        
-        # Payments
-        c.execute('''CREATE TABLE IF NOT EXISTS payments (
-            payment_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            method TEXT,
-            reference TEXT,
-            image_file_id TEXT,
-            status TEXT DEFAULT 'pending',
-            timestamp TEXT,
-            processed_by BIGINT,
-            processed_date TEXT
-        )''')
-        
-        # Withdrawals
-        c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
-            withdraw_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            amount REAL,
-            bank_name TEXT,
-            account_number TEXT,
-            account_name TEXT,
-            status TEXT DEFAULT 'pending',
-            request_date TEXT,
-            processed_date TEXT,
-            processed_by BIGINT
-        )''')
-        
-        # Admin wallet
-        c.execute('''CREATE TABLE IF NOT EXISTS admin_wallet (
-            id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0,
-            total_earned REAL DEFAULT 0,
-            total_withdrawn REAL DEFAULT 0,
-            last_updated TEXT
-        )''')
-        
-        # Notifications
-        c.execute('''CREATE TABLE IF NOT EXISTS notifications (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            title TEXT,
-            message TEXT,
-            is_read INTEGER DEFAULT 0,
-            created_date TEXT
-        )''')
-        
-        # Bot settings
-        c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
-            setting_key TEXT PRIMARY KEY,
-            setting_value TEXT,
-            description TEXT,
-            updated_date TEXT
-        )''')
-        
-        # Reports
-        c.execute('''CREATE TABLE IF NOT EXISTS reports (
-            report_id TEXT PRIMARY KEY,
-            user_id BIGINT,
-            issue TEXT,
-            image_id TEXT,
-            timestamp TEXT
-        )''')
-        
-        # Support messages
-        c.execute('''CREATE TABLE IF NOT EXISTS support_messages (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            message TEXT,
-            timestamp TEXT
-        )''')
-        
-        # Daily sales
-        c.execute('''CREATE TABLE IF NOT EXISTS daily_sales (
-            id SERIAL PRIMARY KEY,
-            sale_date TEXT UNIQUE,
-            total_sales REAL,
-            total_orders INTEGER,
-            total_users INTEGER,
-            new_users INTEGER,
-            report_sent INTEGER DEFAULT 0
-        )''')
-        
-        # Default settings
-        default_settings = [
-            ('bot_name', 'Hamzzy Marketplace', 'Bot display name'),
-            ('currency_symbol', '₦', 'Currency symbol'),
-            ('min_deposit', '500', 'Minimum deposit'),
-            ('min_withdrawal', '5000', 'Minimum withdrawal'),
-            ('referral_bonus', '250', 'Referral bonus'),
-            ('low_stock_threshold', '3', 'Low stock alert threshold'),
-            ('contact_phone', CONTACT_PHONE, 'Contact phone'),
-            ('contact_email', CONTACT_EMAIL, 'Contact email'),
-            ('contact_admin', CONTACT_ADMIN, 'Contact admin'),
-            ('auto_report_time', '08:00', 'Daily report time'),
-        ]
-        for key, value, desc in default_settings:
-            c.execute('INSERT INTO bot_settings (setting_key, setting_value, description, updated_date) VALUES (%s, %s, %s, %s) ON CONFLICT (setting_key) DO NOTHING',
-                      (key, value, desc, datetime.datetime.now().isoformat()))
-        
-        # Default FB categories
-        default_fb_categories = [
-            ("local_normal", "🇳🇬 Local Nigeria FB", 2000, 0, "Local Nigerian account", 1, 1),
-            ("local_with_page", "🇳🇬 Local Nigeria FB + Page", 3500, 1, "Local account with page", 1, 2),
-            ("foreign_normal", "🌍 Foreign FB", 3000, 0, "Foreign account", 1, 3),
-            ("foreign_with_page", "🌍 Foreign FB + Page", 4500, 1, "Foreign account with page", 1, 4),
-        ]
-        for name, display, price, has_page, desc, active, order in default_fb_categories:
-            c.execute('INSERT INTO fb_categories (name, display_name, price, has_page, description, is_active, sort_order, created_date) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING',
-                      (name, display, price, has_page, desc, active, order, datetime.datetime.now().isoformat()))
-        
-        # Admin wallet
-        c.execute('SELECT COUNT(*) FROM admin_wallet')
-        if c.fetchone()[0] == 0:
-            c.execute('INSERT INTO admin_wallet (id, balance, total_earned, total_withdrawn, last_updated) VALUES (1, 0, 0, 0, %s)',
-                      (datetime.datetime.now().isoformat(),))
-        
-        # Make master admin
-        c.execute('UPDATE users SET is_admin = 1 WHERE user_id = %s', (MASTER_ADMIN_ID,))
-        c.execute('INSERT INTO users (user_id, username, first_name, referral_code, join_date, last_active, is_admin, wallet_balance) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING',
-                  (MASTER_ADMIN_ID, BOT_USERNAME, "Master Admin", f"rf_{MASTER_ADMIN_ID}", datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat(), 1, 0))
-        
-        # Create indexes
-        c.execute('CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)')
-        
-        conn.commit()
-        conn.close()
-        print("✅ PostgreSQL database initialized")
-    
-    def init_sqlite(self):
-        # Your existing SQLite initialization code here
-        # (keep your original init_db code)
+    def init_db(self):
         c = self.cursor()
         
         # Users table with referral_bonus_given column
@@ -613,7 +363,7 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)")
         
         self.commit()
-        print("✅ SQLite database initialized")
+        logger.info("Database initialized")
 
 # =================================================================================
 # HELPER FUNCTIONS
