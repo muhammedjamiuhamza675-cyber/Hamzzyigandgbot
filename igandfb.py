@@ -1,4 +1,4 @@
-/#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 HAMZZY MARKETPLACE BOT - COMPLETE PROFESSIONAL VERSION
 All features working: BUY IG, BUY FACEBOOK, Wallet Control, Referrals,
