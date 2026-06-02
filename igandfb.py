@@ -28,7 +28,7 @@ from pathlib import Path
 # CONFIGURATION
 # =================================================================================
 
-BOT_TOKEN = "8694523853:AAHsmwaN3VEW2oRrDX3YHhCZHakDnb3fp2U"
+BOT_TOKEN = "8694523853:AAHe2lPtJ3OmtnaIVR8X5d_dwi6pf2n2SW4"
 MASTER_ADMIN_ID = 7443685686
 BOT_USERNAME = "Igtoolsandbypass_bot"
 MY_SIGNATURE = "@hamzzyhacket"
