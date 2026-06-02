@@ -804,7 +804,7 @@ def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     return success, failed
 
 def extract_emails_from_text(text: str) -> List[Dict]:
-    """Extract emails, passwords, followers from any text"""
+    """Extract emails, passwords, followers from any text format"""
     results = []
     lines = text.strip().split('\n')
     
@@ -817,40 +817,65 @@ def extract_emails_from_text(text: str) -> List[Dict]:
         password = None
         followers = None
         
-        # Pipe format: email|password|followers
-        if '|' in line:
+        # Look for EMAIL: pattern
+        email_match = re.search(r'EMAIL\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
+        if email_match:
+            email = email_match.group(1)
+        
+        # Look for RESET: pattern (password)
+        reset_match = re.search(r'RESET\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
+        if reset_match:
+            reset_value = reset_match.group(1)
+            if reset_value.lower() not in ['error-reset', 'none', 'null', '?']:
+                password = reset_match.group(1)
+        
+        # Look for FOLLOWERS: pattern
+        followers_match = re.search(r'FOLLOWERS?\s*:\s*[\[\(]?\s*(\d+)', line, re.IGNORECASE)
+        if followers_match:
+            followers = int(followers_match.group(1))
+        
+        # Pipe format email|password|followers
+        if '|' in line and not email:
             parts = line.split('|')
             if len(parts) >= 1 and '@' in parts[0]:
                 email = parts[0].strip()
-            if len(parts) >= 2:
+            if len(parts) >= 2 and parts[1].strip():
                 password = parts[1].strip()
             if len(parts) >= 3 and parts[2].strip().isdigit():
                 followers = int(parts[2].strip())
         
-        # Colon format: email:password:followers
+        # Colon format email:password:followers
         elif ':' in line and not email:
             parts = line.split(':')
             if len(parts) >= 1 and '@' in parts[0]:
                 email = parts[0].strip()
-            if len(parts) >= 2:
+            if len(parts) >= 2 and parts[1].strip():
                 password = parts[1].strip()
             if len(parts) >= 3 and parts[2].strip().isdigit():
                 followers = int(parts[2].strip())
         
-        # Just email with underscore followers
-        elif '@' in line:
+        # Just find any email in the line
+        if not email:
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
             if email_match:
                 email = email_match.group()
                 underscore_match = re.search(r'_(\d+)', email)
                 if underscore_match:
                     followers = int(underscore_match.group(1))
-                else:
-                    numbers = re.findall(r'\b(\d+)\b', line)
-                    if numbers:
-                        followers = int(numbers[0])
+        
+        # Look for numbers near email
+        if not followers and email:
+            numbers = re.findall(r'\b(\d+)\b', line)
+            if numbers:
+                for num in numbers:
+                    num_int = int(num)
+                    if 1 <= num_int <= 1000000:
+                        followers = num_int
+                        break
         
         if email and re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+            if password:
+                password = re.sub(r'[\[\]\(\)]', '', password)
             results.append({
                 'email': email,
                 'password': password if password else "",
