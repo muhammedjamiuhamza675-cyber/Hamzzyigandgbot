@@ -804,7 +804,7 @@ def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     return success, failed
 
 def extract_emails_from_text(text: str) -> List[Dict]:
-    """Extract emails, passwords, followers from any text format"""
+    """Extract emails and ANY number near it as followers (reset is NOT password)"""
     results = []
     lines = text.strip().split('\n')
     
@@ -813,74 +813,59 @@ def extract_emails_from_text(text: str) -> List[Dict]:
         if not line:
             continue
         
-        email = None
+        # Find any email in the line
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
+        if not email_match:
+            continue
+        
+        email = email_match.group()
         password = None
         followers = None
         
-        # Look for EMAIL: pattern
-        email_match = re.search(r'EMAIL\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
-        if email_match:
-            email = email_match.group(1)
+        # Find ANY number in the same line (that's not part of the email)
+        numbers = re.findall(r'\b(\d+)\b', line)
+        if numbers:
+            for num in numbers:
+                num_int = int(num)
+                # Ignore very small numbers (1-9) unless it's the only number
+                if num_int >= 10 or (len(numbers) == 1 and num_int >= 1):
+                    followers = num_int
+                    break
         
-        # Look for RESET: pattern (password)
-        reset_match = re.search(r'RESET\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
-        if reset_match:
-            reset_value = reset_match.group(1)
-            if reset_value.lower() not in ['error-reset', 'none', 'null', '?']:
-                password = reset_match.group(1)
+        # Look for password - ONLY if explicitly marked as "pass" or "password"
+        # NOT "reset" - reset is NOT a password
+        pass_match = re.search(r'(?:pass|password|pw)\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
+        if pass_match:
+            pass_value = pass_match.group(1)
+            # Filter out invalid passwords
+            if pass_value.lower() not in ['none', 'null', '?'] and '@' not in pass_value and 'http' not in pass_value:
+                password = pass_value
         
-        # Look for FOLLOWERS: pattern
-        followers_match = re.search(r'FOLLOWERS?\s*:\s*[\[\(]?\s*(\d+)', line, re.IGNORECASE)
-        if followers_match:
-            followers = int(followers_match.group(1))
-        
-        # Pipe format email|password|followers
-        if '|' in line and not email:
+        # Also check for pipe format: email|password|followers
+        if '|' in line and not password:
             parts = line.split('|')
-            if len(parts) >= 1 and '@' in parts[0]:
-                email = parts[0].strip()
             if len(parts) >= 2 and parts[1].strip():
-                password = parts[1].strip()
+                potential_pass = parts[1].strip()
+                if '@' not in potential_pass and 'http' not in potential_pass:
+                    password = potential_pass
             if len(parts) >= 3 and parts[2].strip().isdigit():
                 followers = int(parts[2].strip())
         
-        # Colon format email:password:followers
-        elif ':' in line and not email:
+        # Check for colon format: email:password:followers
+        if ':' in line and not password and '|' not in line:
             parts = line.split(':')
-            if len(parts) >= 1 and '@' in parts[0]:
-                email = parts[0].strip()
             if len(parts) >= 2 and parts[1].strip():
-                password = parts[1].strip()
+                potential_pass = parts[1].strip()
+                if '@' not in potential_pass and 'http' not in potential_pass:
+                    password = potential_pass
             if len(parts) >= 3 and parts[2].strip().isdigit():
                 followers = int(parts[2].strip())
         
-        # Just find any email in the line
-        if not email:
-            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
-            if email_match:
-                email = email_match.group()
-                underscore_match = re.search(r'_(\d+)', email)
-                if underscore_match:
-                    followers = int(underscore_match.group(1))
-        
-        # Look for numbers near email
-        if not followers and email:
-            numbers = re.findall(r'\b(\d+)\b', line)
-            if numbers:
-                for num in numbers:
-                    num_int = int(num)
-                    if 1 <= num_int <= 1000000:
-                        followers = num_int
-                        break
-        
-        if email and re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
-            if password:
-                password = re.sub(r'[\[\]\(\)]', '', password)
-            results.append({
-                'email': email,
-                'password': password if password else "",
-                'followers': followers
-            })
+        results.append({
+            'email': email,
+            'password': password if password else "",
+            'followers': followers
+        })
     
     # Remove duplicates
     seen = set()
