@@ -2410,10 +2410,43 @@ def handle_message(message):
                 bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
                 del user_sessions[user_id]
                 return
+            
+            # Try to extract from hit message format first
+            extracted = extract_emails_from_text(text)
+            
+            if extracted:
+                # Found emails in the message
+                for item in extracted:
+                    email = item['email']
+                    followers = item['followers']
+                    password = item.get('password', '')
+                    
+                    if not followers:
+                        bot.reply_to(message, f"❌ Could not detect followers for {email}. Use format: username|followers|password", parse_mode='HTML')
+                        return
+                    
+                    # Extract username from email (before @)
+                    username = email.split('@')[0]
+                    
+                    price = get_price_for_followers(followers)
+                    if price is None:
+                        bot.reply_to(message, f"❌ No price defined for {followers} followers", parse_mode='HTML')
+                        return
+                    
+                    success = add_ig_stock(username, password if password else None, followers, price, user_id, has_pass=(password is not None))
+                    if success:
+                        bot.reply_to(message, f"✅ Added IG account @{username} with {followers} followers @ ₦{price:,.0f}", parse_mode='HTML')
+                    else:
+                        bot.reply_to(message, f"❌ Failed to add @{username} (duplicate?)", parse_mode='HTML')
+                del user_sessions[user_id]
+                return
+            
+            # Fallback to original pipe format
             parts = text.split('|')
             if len(parts) < 2:
-                bot.reply_to(message, "❌ Invalid format! Use: username|followers|password", parse_mode='HTML')
+                bot.reply_to(message, "❌ Invalid format! Use:\n- `username|followers|password`\n- Or paste a hit message with email and followers", parse_mode='HTML')
                 return
+            
             username = parts[0].strip()
             try:
                 followers = int(parts[1].strip())
