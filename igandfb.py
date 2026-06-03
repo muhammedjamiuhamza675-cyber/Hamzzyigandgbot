@@ -2396,10 +2396,9 @@ def handle_message(message):
                 for item in extracted:
                     email = item['email']
                     followers = item['followers']
-                    password = item.get('password', '')
                     
                     if not followers:
-                        bot.reply_to(message, f"❌ Could not detect followers for {email}. Use format: username|followers|password", parse_mode='HTML')
+                        bot.reply_to(message, f"❌ Could not detect followers for {email}.", parse_mode='HTML')
                         return
                     
                     # Extract username from email (before @)
@@ -2410,7 +2409,7 @@ def handle_message(message):
                         bot.reply_to(message, f"❌ No price defined for {followers} followers", parse_mode='HTML')
                         return
                     
-                    success = add_ig_stock(username, password if password else None, followers, price, user_id, has_pass=(password is not None))
+                    success = add_ig_stock(username, None, followers, price, user_id, has_pass=False)
                     if success:
                         bot.reply_to(message, f"✅ Added IG account @{username} with {followers} followers @ ₦{price:,.0f}", parse_mode='HTML')
                     else:
