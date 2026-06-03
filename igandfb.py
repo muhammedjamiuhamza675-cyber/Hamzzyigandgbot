@@ -804,9 +804,20 @@ def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     return success, failed
 
 def extract_emails_from_text(text: str) -> List[Dict]:
-    """Extract emails and ANY number near it as followers (reset is NOT password)"""
+    """Extract emails and ANY number from ANY line (reset is NOT password)"""
     results = []
     lines = text.strip().split('\n')
+    
+    # First pass: collect all emails and find numbers across entire text
+    all_numbers = re.findall(r'\b(\d+)\b', text)
+    followers_from_anywhere = None
+    
+    # Find the most reasonable follower count (between 10 and 1,000,000)
+    for num in all_numbers:
+        num_int = int(num)
+        if 10 <= num_int <= 1000000:
+            followers_from_anywhere = num_int
+            break
     
     for line in lines:
         line = line.strip()
@@ -822,26 +833,27 @@ def extract_emails_from_text(text: str) -> List[Dict]:
         password = None
         followers = None
         
-        # Find ANY number in the same line (that's not part of the email)
-        numbers = re.findall(r'\b(\d+)\b', line)
-        if numbers:
-            for num in numbers:
+        # Check if there's a number on this specific line
+        numbers_in_line = re.findall(r'\b(\d+)\b', line)
+        if numbers_in_line:
+            for num in numbers_in_line:
                 num_int = int(num)
-                # Ignore very small numbers (1-9) unless it's the only number
-                if num_int >= 10 or (len(numbers) == 1 and num_int >= 1):
+                if 10 <= num_int <= 1000000:
                     followers = num_int
                     break
         
+        # If no followers on this line, use the global one
+        if not followers and followers_from_anywhere:
+            followers = followers_from_anywhere
+        
         # Look for password - ONLY if explicitly marked as "pass" or "password"
-        # NOT "reset" - reset is NOT a password
         pass_match = re.search(r'(?:pass|password|pw)\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
         if pass_match:
             pass_value = pass_match.group(1)
-            # Filter out invalid passwords
             if pass_value.lower() not in ['none', 'null', '?'] and '@' not in pass_value and 'http' not in pass_value:
                 password = pass_value
         
-        # Also check for pipe format: email|password|followers
+        # Also check for pipe/colon formats
         if '|' in line and not password:
             parts = line.split('|')
             if len(parts) >= 2 and parts[1].strip():
@@ -851,7 +863,6 @@ def extract_emails_from_text(text: str) -> List[Dict]:
             if len(parts) >= 3 and parts[2].strip().isdigit():
                 followers = int(parts[2].strip())
         
-        # Check for colon format: email:password:followers
         if ':' in line and not password and '|' not in line:
             parts = line.split(':')
             if len(parts) >= 2 and parts[1].strip():
