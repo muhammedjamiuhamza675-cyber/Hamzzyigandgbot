@@ -2234,6 +2234,92 @@ Click CONFIRM to purchase.
         del user_sessions[user_id]
         return
 
+    # ========== NEW: PER-ACCOUNT CONFIRMATION FOR ADD IG ==========
+    if data.startswith("confirm_add_ig_"):
+        parts = data.split("_")
+        # Format: confirm_add_ig_email_username_followers
+        email_encoded = parts[3]
+        username_encoded = parts[4]
+        followers = int(parts[5])
+        
+        # Decode email
+        email = email_encoded.replace('_DOT_', '.').replace('_AT_', '@')
+        username = username_encoded.replace('_DOT_', '.')
+        
+        price = get_price_for_followers(followers)
+        if price is None:
+            bot.answer_callback_query(call.id, f"❌ No price for {followers} followers", show_alert=True)
+            return
+        
+        success = add_ig_stock(username, None, followers, price, user_id, has_pass=False)
+        if success:
+            bot.answer_callback_query(call.id, f"✅ Added @{username} with {followers} followers", show_alert=True)
+            bot.edit_message_text(f"✅ Added @{username} with {followers} followers @ ₦{price:,.0f}", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        else:
+            bot.answer_callback_query(call.id, "❌ Failed to add (duplicate?)", show_alert=True)
+        
+        # Show next item if any
+        items = user_sessions.get(user_id, {}).get('pending_items', [])
+        index = user_sessions.get(user_id, {}).get('current_index', 0)
+        
+        if index + 1 < len(items):
+            user_sessions[user_id]['current_index'] = index + 1
+            show_next_item(user_id, call.message.chat.id, call.message.message_id)
+        else:
+            bot.send_message(call.message.chat.id, "✅ All accounts processed!", parse_mode='HTML')
+            del user_sessions[user_id]
+        return
+
+    if data.startswith("edit_add_ig_"):
+        parts = data.split("_")
+        email_encoded = parts[3]
+        username_encoded = parts[4]
+        followers = int(parts[5])
+        
+        # Decode email
+        email = email_encoded.replace('_DOT_', '.').replace('_AT_', '@')
+        username = username_encoded.replace('_DOT_', '.')
+        
+        user_sessions[user_id] = {
+            'state': 'edit_ig_followers',
+            'email': email,
+            'username': username,
+            'current_followers': followers,
+            'pending_items': user_sessions.get(user_id, {}).get('pending_items', []),
+            'current_index': user_sessions.get(user_id, {}).get('current_index', 0)
+        }
+        
+        bot.edit_message_text(
+            f"✏️ **EDIT FOLLOWERS**\n\n"
+            f"📧 Email: {email}\n"
+            f"👤 Username: @{username}\n"
+            f"📸 Current followers: {followers}\n\n"
+            f"Send the correct followers count:\n\n"
+            f"Type /cancel to skip this account.",
+            call.message.chat.id, call.message.message_id, parse_mode='HTML'
+        )
+        return
+
+    if data.startswith("skip_add_ig_"):
+        items = user_sessions.get(user_id, {}).get('pending_items', [])
+        index = user_sessions.get(user_id, {}).get('current_index', 0)
+        
+        bot.answer_callback_query(call.id, "⏭️ Skipped", show_alert=True)
+        
+        if index + 1 < len(items):
+            user_sessions[user_id]['current_index'] = index + 1
+            show_next_item(user_id, call.message.chat.id, call.message.message_id)
+        else:
+            bot.send_message(call.message.chat.id, "✅ All accounts processed!", parse_mode='HTML')
+            del user_sessions[user_id]
+        return
+
+    if data == "stop_add_ig":
+        bot.answer_callback_query(call.id, "⏹️ Stopped", show_alert=True)
+        bot.edit_message_text("⏹️ **STOPPED**\n\nNo more accounts will be added.", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        del user_sessions[user_id]
+        return
+
     if data == "admin_back":
         bot.edit_message_text("🔧 ADMIN CONTROL PANEL", call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=admin_keyboard())
         return
@@ -2361,6 +2447,57 @@ def process_fb_upload_screenshots(message):
         return
 
 # =================================================================================
+# HELPER FUNCTION FOR PER-ACCOUNT CONFIRMATION (ADD BEFORE MESSAGE HANDLER)
+# =================================================================================
+
+def show_next_item(user_id: int, chat_id: int, message_id: int = None):
+    """Show the next extracted item for confirmation"""
+    session = user_sessions.get(user_id, {})
+    items = session.get('pending_items', [])
+    index = session.get('current_index', 0)
+    
+    if index >= len(items):
+        bot.send_message(chat_id, "✅ All accounts processed!", parse_mode='HTML')
+        if user_id in user_sessions:
+            del user_sessions[user_id]
+        return
+    
+    item = items[index]
+    email = item['email']
+    username = item['username']
+    followers = item['followers']
+    
+    # Encode for callback data
+    email_encoded = email.replace('.', '_DOT_').replace('@', '_AT_')
+    username_encoded = username.replace('.', '_DOT_')
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ ADD", callback_data=f"confirm_add_ig_{email_encoded}_{username_encoded}_{followers}"),
+        types.InlineKeyboardButton("✏️ EDIT", callback_data=f"edit_add_ig_{email_encoded}_{username_encoded}_{followers}"),
+        types.InlineKeyboardButton("⏭️ SKIP", callback_data=f"skip_add_ig_{email_encoded}_{username_encoded}_{followers}"),
+        types.InlineKeyboardButton("⏹️ STOP", callback_data="stop_add_ig")
+    )
+    
+    msg = f"""
+📧 **ACCOUNT {index + 1} OF {len(items)}**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📧 Email: `{email}`
+👤 Username: @{username}
+📸 Followers: {followers}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Select an option:
+"""
+    if message_id:
+        bot.edit_message_text(msg, chat_id, message_id, parse_mode='HTML', reply_markup=markup)
+    else:
+        bot.send_message(chat_id, msg, parse_mode='HTML', reply_markup=markup)
+
+# =================================================================================
 # MESSAGE HANDLER
 # =================================================================================
 
@@ -2382,6 +2519,56 @@ def handle_message(message):
             process_withdraw(message)
             return
         
+        # ========== NEW: EDIT IG FOLLOWERS STATE ==========
+        if state == 'edit_ig_followers':
+            if text == '/cancel':
+                bot.reply_to(message, "❌ Skipped.", parse_mode='HTML')
+                # Show next item
+                items = user_sessions.get(user_id, {}).get('pending_items', [])
+                index = user_sessions.get(user_id, {}).get('current_index', 0)
+                if index + 1 < len(items):
+                    user_sessions[user_id]['current_index'] = index + 1
+                    show_next_item(user_id, message.chat.id)
+                else:
+                    bot.reply_to(message, "✅ All accounts processed!", parse_mode='HTML')
+                    del user_sessions[user_id]
+                return
+            
+            try:
+                new_followers = int(text.strip())
+                if new_followers < 10:
+                    bot.reply_to(message, "❌ Followers must be at least 10!", parse_mode='HTML')
+                    return
+                
+                session = user_sessions[user_id]
+                email = session.get('email')
+                username = session.get('username')
+                price = get_price_for_followers(new_followers)
+                
+                if price is None:
+                    bot.reply_to(message, f"❌ No price defined for {new_followers} followers", parse_mode='HTML')
+                    return
+                
+                success = add_ig_stock(username, None, new_followers, price, user_id, has_pass=False)
+                if success:
+                    bot.reply_to(message, f"✅ Added @{username} with {new_followers} followers @ ₦{price:,.0f}", parse_mode='HTML')
+                else:
+                    bot.reply_to(message, f"❌ Failed to add @{username} (duplicate?)", parse_mode='HTML')
+                
+                # Show next item
+                items = session.get('pending_items', [])
+                index = session.get('current_index', 0)
+                if index + 1 < len(items):
+                    user_sessions[user_id]['current_index'] = index + 1
+                    show_next_item(user_id, message.chat.id)
+                else:
+                    bot.reply_to(message, "✅ All accounts processed!", parse_mode='HTML')
+                    del user_sessions[user_id]
+            except ValueError:
+                bot.reply_to(message, "❌ Send a valid number!", parse_mode='HTML')
+            return
+        
+        # ========== UPDATED: ADD IG ACCOUNT WITH PER-ACCOUNT CONFIRMATION ==========
         if state == 'add_ig_account':
             if text == '/cancel':
                 bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
@@ -2392,29 +2579,13 @@ def handle_message(message):
             extracted = extract_emails_from_text(text)
             
             if extracted:
-                # Found emails in the message
-                for item in extracted:
-                    email = item['email']
-                    followers = item['followers']
-                    
-                    if not followers:
-                        bot.reply_to(message, f"❌ Could not detect followers for {email}.", parse_mode='HTML')
-                        return
-                    
-                    # Extract username from email (before @)
-                    username = email.split('@')[0]
-                    
-                    price = get_price_for_followers(followers)
-                    if price is None:
-                        bot.reply_to(message, f"❌ No price defined for {followers} followers", parse_mode='HTML')
-                        return
-                    
-                    success = add_ig_stock(username, None, followers, price, user_id, has_pass=False)
-                    if success:
-                        bot.reply_to(message, f"✅ Added IG account @{username} with {followers} followers @ ₦{price:,.0f}", parse_mode='HTML')
-                    else:
-                        bot.reply_to(message, f"❌ Failed to add @{username} (duplicate?)", parse_mode='HTML')
-                del user_sessions[user_id]
+                # Store all extracted items in session for per-account confirmation
+                user_sessions[user_id] = {
+                    'pending_items': extracted,
+                    'current_index': 0
+                }
+                # Show first item for confirmation
+                show_next_item(user_id, message.chat.id)
                 return
             
             # Fallback to original pipe format
@@ -2645,105 +2816,105 @@ def handle_message(message):
             del user_sessions[user_id]
             return
         
-        # Wallet control states
-        if state == 'wallet_add':
-            if text == '/cancel':
-                bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
-                del user_sessions[user_id]
-                return
-            parts = text.split('|')
-            if len(parts) != 2:
-                bot.reply_to(message, "❌ Use: USER_ID|AMOUNT", parse_mode='HTML')
-                return
-            try:
-                target_id = int(parts[0].strip())
-                amount = float(parts[1].strip())
-                if amount <= 0:
-                    bot.reply_to(message, "❌ Amount must be > 0", parse_mode='HTML')
-                    return
-                new_balance = add_wallet(target_id, amount)
-                bot.reply_to(message, f"✅ Added ₦{amount:,.2f} to user {target_id}\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                add_notification(target_id, "Wallet Update", f"₦{amount:,.2f} added to your wallet. New balance: ₦{new_balance:,.2f}")
-                try:
-                    bot.send_message(target_id, f"💰 ₦{amount:,.2f} added to your wallet!\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                except:
-                    pass
-            except:
-                bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
+            # Wallet control states
+    if state == 'wallet_add':
+        if text == '/cancel':
+            bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
             del user_sessions[user_id]
             return
-        
-        if state == 'wallet_remove':
-            if text == '/cancel':
-                bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
-                del user_sessions[user_id]
-                return
-            parts = text.split('|')
-            if len(parts) != 2:
-                bot.reply_to(message, "❌ Use: USER_ID|AMOUNT", parse_mode='HTML')
-                return
-            try:
-                target_id = int(parts[0].strip())
-                amount = float(parts[1].strip())
-                if amount <= 0:
-                    bot.reply_to(message, "❌ Amount must be > 0", parse_mode='HTML')
-                    return
-                new_balance = remove_wallet(target_id, amount)
-                bot.reply_to(message, f"✅ Removed ₦{amount:,.2f} from user {target_id}\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                add_notification(target_id, "Wallet Update", f"₦{amount:,.2f} removed from your wallet. New balance: ₦{new_balance:,.2f}")
-                try:
-                    bot.send_message(target_id, f"💰 ₦{amount:,.2f} removed from your wallet!\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                except:
-                    pass
-            except:
-                bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
-            del user_sessions[user_id]
+        parts = text.split('|')
+        if len(parts) != 2:
+            bot.reply_to(message, "❌ Use: USER_ID|AMOUNT", parse_mode='HTML')
             return
-        
-        if state == 'wallet_set':
-            if text == '/cancel':
-                bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
-                del user_sessions[user_id]
+        try:
+            target_id = int(parts[0].strip())
+            amount = float(parts[1].strip())
+            if amount <= 0:
+                bot.reply_to(message, "❌ Amount must be > 0", parse_mode='HTML')
                 return
-            parts = text.split('|')
-            if len(parts) != 2:
-                bot.reply_to(message, "❌ Use: USER_ID|NEW_BALANCE", parse_mode='HTML')
-                return
+            new_balance = add_wallet(target_id, amount)
+            bot.reply_to(message, f"✅ Added ₦{amount:,.2f} to user {target_id}\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+            add_notification(target_id, "Wallet Update", f"₦{amount:,.2f} added to your wallet. New balance: ₦{new_balance:,.2f}")
             try:
-                target_id = int(parts[0].strip())
-                new_balance = float(parts[1].strip())
-                if new_balance < 0:
-                    bot.reply_to(message, "❌ Balance cannot be negative", parse_mode='HTML')
-                    return
-                set_wallet(target_id, new_balance)
-                bot.reply_to(message, f"✅ User {target_id} wallet set to ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                add_notification(target_id, "Wallet Update", f"Your wallet balance has been set to ₦{new_balance:,.2f}")
-                try:
-                    bot.send_message(target_id, f"💰 Your wallet balance has been set to ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-                except:
-                    pass
+                bot.send_message(target_id, f"💰 ₦{amount:,.2f} added to your wallet!\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
             except:
-                bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
-            del user_sessions[user_id]
-            return
-        
-        if state == 'wallet_check':
-            if text == '/cancel':
-                bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
-                del user_sessions[user_id]
-                return
-            try:
-                target_id = int(text.strip())
-                balance = get_wallet(target_id)
-                user = get_user(target_id)
-                name = user.get('first_name', 'Unknown') if user else 'Unknown'
-                bot.reply_to(message, f"🔍 **USER BALANCE**\n\n👤 {name} ({target_id})\n💰 ₦{balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
-            except:
-                bot.reply_to(message, "❌ Invalid USER_ID!", parse_mode='HTML')
-            del user_sessions[user_id]
-            return
+                pass
+        except:
+            bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
+        del user_sessions[user_id]
+        return
     
-    # Main menu buttons
+    if state == 'wallet_remove':
+        if text == '/cancel':
+            bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
+            del user_sessions[user_id]
+            return
+        parts = text.split('|')
+        if len(parts) != 2:
+            bot.reply_to(message, "❌ Use: USER_ID|AMOUNT", parse_mode='HTML')
+            return
+        try:
+            target_id = int(parts[0].strip())
+            amount = float(parts[1].strip())
+            if amount <= 0:
+                bot.reply_to(message, "❌ Amount must be > 0", parse_mode='HTML')
+                return
+            new_balance = remove_wallet(target_id, amount)
+            bot.reply_to(message, f"✅ Removed ₦{amount:,.2f} from user {target_id}\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+            add_notification(target_id, "Wallet Update", f"₦{amount:,.2f} removed from your wallet. New balance: ₦{new_balance:,.2f}")
+            try:
+                bot.send_message(target_id, f"💰 ₦{amount:,.2f} removed from your wallet!\n💰 New balance: ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+            except:
+                pass
+        except:
+            bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
+        del user_sessions[user_id]
+        return
+    
+    if state == 'wallet_set':
+        if text == '/cancel':
+            bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
+            del user_sessions[user_id]
+            return
+        parts = text.split('|')
+        if len(parts) != 2:
+            bot.reply_to(message, "❌ Use: USER_ID|NEW_BALANCE", parse_mode='HTML')
+            return
+        try:
+            target_id = int(parts[0].strip())
+            new_balance = float(parts[1].strip())
+            if new_balance < 0:
+                bot.reply_to(message, "❌ Balance cannot be negative", parse_mode='HTML')
+                return
+            set_wallet(target_id, new_balance)
+            bot.reply_to(message, f"✅ User {target_id} wallet set to ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+            add_notification(target_id, "Wallet Update", f"Your wallet balance has been set to ₦{new_balance:,.2f}")
+            try:
+                bot.send_message(target_id, f"💰 Your wallet balance has been set to ₦{new_balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+            except:
+                pass
+        except:
+            bot.reply_to(message, "❌ Invalid!", parse_mode='HTML')
+        del user_sessions[user_id]
+        return
+    
+    if state == 'wallet_check':
+        if text == '/cancel':
+            bot.reply_to(message, "❌ Cancelled.", parse_mode='HTML')
+            del user_sessions[user_id]
+            return
+        try:
+            target_id = int(text.strip())
+            balance = get_wallet(target_id)
+            user = get_user(target_id)
+            name = user.get('first_name', 'Unknown') if user else 'Unknown'
+            bot.reply_to(message, f"🔍 **USER BALANCE**\n\n👤 {name} ({target_id})\n💰 ₦{balance:,.2f}\n\n💎 {MY_SIGNATURE}", parse_mode='HTML')
+        except:
+            bot.reply_to(message, "❌ Invalid USER_ID!", parse_mode='HTML')
+        del user_sessions[user_id]
+        return
+
+# Main menu buttons
     if text == "🔧 ADMIN PANEL" and is_admin(user_id):
         bot.reply_to(message, "🔧 ADMIN CONTROL PANEL", parse_mode='HTML', reply_markup=admin_keyboard())
     elif text == "🔗 BUY IG":
