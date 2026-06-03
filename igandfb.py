@@ -804,79 +804,69 @@ def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     return success, failed
 
 def extract_emails_from_text(text: str) -> List[Dict]:
-    """Extract emails and ANY number from ANY line (reset is NOT password)"""
+    """Extract emails and followers from text (RESET is NOT password)"""
     results = []
     lines = text.strip().split('\n')
-    
-    # First pass: collect all emails and find numbers across entire text
-    all_numbers = re.findall(r'\b(\d+)\b', text)
-    followers_from_anywhere = None
-    
-    # Find the most reasonable follower count (between 10 and 1,000,000)
-    for num in all_numbers:
-        num_int = int(num)
-        if 10 <= num_int <= 1000000:
-            followers_from_anywhere = num_int
-            break
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # Find any email in the line
-        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
-        if not email_match:
-            continue
-        
-        email = email_match.group()
-        password = None
+        email = None
         followers = None
         
-        # Check if there's a number on this specific line
-        numbers_in_line = re.findall(r'\b(\d+)\b', line)
-        if numbers_in_line:
-            for num in numbers_in_line:
-                num_int = int(num)
-                if 10 <= num_int <= 1000000:
-                    followers = num_int
-                    break
+        # Look for EMAIL: pattern (works with Unicode)
+        email_match = re.search(r'EMAIL\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
+        if email_match:
+            email = email_match.group(1)
         
-        # If no followers on this line, use the global one
-        if not followers and followers_from_anywhere:
-            followers = followers_from_anywhere
+        # Look for FOLLOWERS: pattern (works with Unicode)
+        followers_match = re.search(r'FOLLOWERS?\s*:\s*[\[\(]?\s*(\d+)', line, re.IGNORECASE)
+        if followers_match:
+            followers = int(followers_match.group(1))
         
-        # Look for password - ONLY if explicitly marked as "pass" or "password"
-        pass_match = re.search(r'(?:pass|password|pw)\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
-        if pass_match:
-            pass_value = pass_match.group(1)
-            if pass_value.lower() not in ['none', 'null', '?'] and '@' not in pass_value and 'http' not in pass_value:
-                password = pass_value
-        
-        # Also check for pipe/colon formats
-        if '|' in line and not password:
+        # Pipe format email|followers
+        if '|' in line and not email:
             parts = line.split('|')
-            if len(parts) >= 2 and parts[1].strip():
-                potential_pass = parts[1].strip()
-                if '@' not in potential_pass and 'http' not in potential_pass:
-                    password = potential_pass
-            if len(parts) >= 3 and parts[2].strip().isdigit():
-                followers = int(parts[2].strip())
+            if len(parts) >= 1 and '@' in parts[0]:
+                email = parts[0].strip()
+            if len(parts) >= 2 and parts[1].strip().isdigit():
+                followers = int(parts[1].strip())
         
-        if ':' in line and not password and '|' not in line:
+        # Colon format email:followers
+        elif ':' in line and not email:
             parts = line.split(':')
-            if len(parts) >= 2 and parts[1].strip():
-                potential_pass = parts[1].strip()
-                if '@' not in potential_pass and 'http' not in potential_pass:
-                    password = potential_pass
-            if len(parts) >= 3 and parts[2].strip().isdigit():
-                followers = int(parts[2].strip())
+            if len(parts) >= 1 and '@' in parts[0]:
+                email = parts[0].strip()
+            if len(parts) >= 2 and parts[1].strip().isdigit():
+                followers = int(parts[1].strip())
         
-        results.append({
-            'email': email,
-            'password': password if password else "",
-            'followers': followers
-        })
+        # Just find any email in the line
+        if not email:
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
+            if email_match:
+                email = email_match.group()
+                underscore_match = re.search(r'_(\d+)', email)
+                if underscore_match:
+                    followers = int(underscore_match.group(1))
+        
+        # Find numbers as fallback
+        if not followers and email:
+            numbers = re.findall(r'\b(\d+)\b', line)
+            if numbers:
+                for num in numbers:
+                    num_int = int(num)
+                    if 10 <= num_int <= 1000000:
+                        followers = num_int
+                        break
+        
+        if email and re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+            results.append({
+                'email': email,
+                'password': "",
+                'followers': followers
+            })
     
     # Remove duplicates
     seen = set()
@@ -1535,6 +1525,7 @@ def process_withdraw(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
+    print(f"🔔 Callback received: {call.data}")  # ← ADDED DEBUG LINE
     user_id = call.from_user.id
     data = call.data
     symbol = get_setting('currency_symbol', '₦')
@@ -1551,7 +1542,18 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, f"❌ No IG accounts in this range!", show_alert=True)
             return
         
-        markup = ig_type_keyboard(followers_min, followers_max, price)
+        # FIXED: Inline keyboard with SAME PRICE for both options
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        only_stock = get_ig_stock_count(followers_min, followers_max, require_password=False)
+        with_pass_stock = get_ig_stock_count(followers_min, followers_max, require_password=True)
+        
+        # SAME PRICE - NO EXTRA CHARGE FOR PASSWORD
+        markup.add(
+            types.InlineKeyboardButton(f"🔗 IG Only - {symbol}{price:,.0f} ({only_stock} in stock)", callback_data=f"buy_ig_only_{followers_min}_{followers_max}_{price}"),
+            types.InlineKeyboardButton(f"🔐 IG + Password - {symbol}{price:,.0f} ({with_pass_stock} in stock)", callback_data=f"buy_ig_withpass_{followers_min}_{followers_max}_{price}"),
+            types.InlineKeyboardButton("◀️ BACK", callback_data="back_main")
+        )
+        
         bot.edit_message_text(
             f"🔗 **IG PACKAGE: {followers_min}-{followers_max} followers**\n\n💰 Price: {symbol}{price:,.0f}\n📦 Available: {stock}\n\nSelect option:",
             call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=markup
@@ -1780,7 +1782,7 @@ Click CONFIRM to purchase.
             call.message.chat.id, call.message.message_id, parse_mode='HTML'
         )
         user_sessions[user_id] = {'state': 'delete_ig_by_id'}
-        return
+        return()
     
     # ========== ADMIN FB MANAGEMENT ==========
     if data == "admin_fb":
