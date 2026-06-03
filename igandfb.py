@@ -804,69 +804,48 @@ def broadcast_with_image(caption: str, image_id: str) -> Tuple[int, int]:
     return success, failed
 
 def extract_emails_from_text(text: str) -> List[Dict]:
-    """Extract emails and followers from text (RESET is NOT password)"""
+    """Extract email and followers from any hit format"""
     results = []
+    
+    # Split into sections (each hit is separated by ─ or ⚊ lines)
     lines = text.strip().split('\n')
+    
+    current_email = None
+    current_followers = None
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        email = None
-        followers = None
-        
-        # Look for EMAIL: pattern (works with Unicode)
-        email_match = re.search(r'EMAIL\s*:\s*[\[\(]?\s*([^\s\]\)]+)', line, re.IGNORECASE)
-        if email_match:
-            email = email_match.group(1)
-        
-        # Look for FOLLOWERS: pattern (works with Unicode)
-        followers_match = re.search(r'FOLLOWERS?\s*:\s*[\[\(]?\s*(\d+)', line, re.IGNORECASE)
-        if followers_match:
-            followers = int(followers_match.group(1))
-        
-        # Pipe format email|followers
-        if '|' in line and not email:
-            parts = line.split('|')
-            if len(parts) >= 1 and '@' in parts[0]:
-                email = parts[0].strip()
-            if len(parts) >= 2 and parts[1].strip().isdigit():
-                followers = int(parts[1].strip())
-        
-        # Colon format email:followers
-        elif ':' in line and not email:
-            parts = line.split(':')
-            if len(parts) >= 1 and '@' in parts[0]:
-                email = parts[0].strip()
-            if len(parts) >= 2 and parts[1].strip().isdigit():
-                followers = int(parts[1].strip())
-        
-        # Just find any email in the line
-        if not email:
+        # Look for email (contains @)
+        if '@' in line and '.com' in line or '.net' in line or '.org' in line:
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
             if email_match:
-                email = email_match.group()
-                underscore_match = re.search(r'_(\d+)', email)
-                if underscore_match:
-                    followers = int(underscore_match.group(1))
+                current_email = email_match.group()
         
-        # Find numbers as fallback
-        if not followers and email:
-            numbers = re.findall(r'\b(\d+)\b', line)
-            if numbers:
-                for num in numbers:
-                    num_int = int(num)
-                    if 10 <= num_int <= 1000000:
-                        followers = num_int
-                        break
+        # Look for followers (any number after "followers" or in brackets)
+        followers_match = re.search(r'[f𝑓]ollowers?\s*[:\➜]\s*\[?\s*(\d+)', line, re.IGNORECASE)
+        if followers_match:
+            current_followers = int(followers_match.group(1))
         
-        if email and re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+        # Also catch simple number in brackets like [56]
+        if not current_followers:
+            bracket_match = re.search(r'\[\s*(\d+)\s*\]', line)
+            if bracket_match:
+                num = int(bracket_match.group(1))
+                if 10 <= num <= 1000000:
+                    current_followers = num
+        
+        # If we have both email and followers, save and reset
+        if current_email and current_followers:
             results.append({
-                'email': email,
+                'email': current_email,
                 'password': "",
-                'followers': followers
+                'followers': current_followers
             })
+            current_email = None
+            current_followers = None
     
     # Remove duplicates
     seen = set()
